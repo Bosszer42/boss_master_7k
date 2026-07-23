@@ -1,0 +1,14 @@
+{
+  "name": "bossmaster-control-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-safe control plane foundation for BOSSMASTER AI CHAT & BATCH",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

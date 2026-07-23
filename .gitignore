@@ -1,6 +1,8 @@
 node_modules/
 release/
 smoke-test-data/
+server/data/
+server/.env
 pnpm-lock.yaml
 pnpm-workspace.yaml
 *.log
