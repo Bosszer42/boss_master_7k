@@ -19,6 +19,8 @@ const MAX_MESSAGE_CHARS = 12000;
 const MAX_CONTEXT_CHARS = 250000;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const MAX_ATTACHMENT_TOTAL_BYTES = 40 * 1024 * 1024;
+const requestHistory = new Map();
+const codeWorkspaces = new Map();
 
 class JsonStore {
   constructor(filePath) {
@@ -72,7 +74,7 @@ function getDataDir() {
 }
 
 function writeLog(level, event, details = {}) {
-  const entry = JSON.stringify({ time: new Date().toISOString(), level, event, ...details });
+  const entry = JSON.stringify({ time: new Date().toISOString(), level, event, userId: currentUserId || null, ...details });
   fs.appendFileSync(path.join(getDataDir(), 'logs', 'app.jsonl'), `${entry}\n`, 'utf8');
 }
 
@@ -115,6 +117,8 @@ function userSettings(userId) {
       geminiModel: '',
       temperature: 0.4,
       maxOutputTokens: 4096,
+      dailyTokenBudget: 0,
+      requestsPerMinute: 30,
       apiKeys: {}
     };
     store.save();
@@ -129,6 +133,8 @@ function publicSettings(settings) {
     geminiModel: settings.geminiModel,
     temperature: settings.temperature,
     maxOutputTokens: settings.maxOutputTokens,
+    dailyTokenBudget: Number(settings.dailyTokenBudget || 0),
+    requestsPerMinute: Number(settings.requestsPerMinute || 30),
     hasOpenAIKey: Boolean(settings.apiKeys?.openai),
     hasGeminiKey: Boolean(settings.apiKeys?.gemini)
   };
@@ -239,6 +245,69 @@ async function apiFetch(url, options = {}, timeoutMs = 180000, maxAttempts = 4, 
     }
   }
   throw lastError;
+}
+
+function tokenCountFromUsage(usage = {}) {
+  return Number(usage.total_tokens || usage.totalTokenCount || 0)
+    || Number(usage.input_tokens || usage.promptTokenCount || 0) + Number(usage.output_tokens || usage.candidatesTokenCount || 0);
+}
+
+function enforceUsageLimits() {
+  const user = requireLogin();
+  const settings = userSettings(user.id);
+  const now = Date.now();
+  const recent = (requestHistory.get(user.id) || []).filter((time) => now - time < 60000);
+  const limit = Math.max(1, Number(settings.requestsPerMinute || 30));
+  if (recent.length >= limit) throw new Error(`ถึงขีดจำกัด ${limit} requests ต่อนาที กรุณารอสักครู่`);
+  recent.push(now);
+  requestHistory.set(user.id, recent);
+  const today = new Date().toISOString().slice(0, 10);
+  store.data.usage ||= {};
+  const daily = store.data.usage[user.id]?.[today] || { tokens: 0, requests: 0 };
+  const budget = Math.max(0, Number(settings.dailyTokenBudget || 0));
+  if (budget && daily.tokens >= budget) throw new Error(`ถึงงบ Token รายวัน ${budget.toLocaleString()} แล้ว`);
+}
+
+function recordUsage(usage) {
+  const user = requireLogin();
+  const today = new Date().toISOString().slice(0, 10);
+  store.data.usage ||= {};
+  store.data.usage[user.id] ||= {};
+  const daily = store.data.usage[user.id][today] ||= { tokens: 0, requests: 0 };
+  daily.tokens += tokenCountFromUsage(usage);
+  daily.requests += 1;
+  store.save();
+}
+
+function workspaceFile(userId, relativePath) {
+  const root = codeWorkspaces.get(userId);
+  if (!root) throw new Error('กรุณาเปิดโฟลเดอร์โปรเจกต์ก่อน');
+  const resolved = path.resolve(root, String(relativePath || ''));
+  const relative = path.relative(root, resolved);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('ตำแหน่งไฟล์อยู่นอก Workspace');
+  if (fs.existsSync(resolved)) {
+    const real = fs.realpathSync(resolved);
+    const realRelative = path.relative(root, real);
+    if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) throw new Error('ไฟล์ลิงก์ออกนอก Workspace');
+  }
+  return { root, resolved, relative };
+}
+
+function listWorkspaceFiles(root) {
+  const output = [];
+  const ignored = new Set(['.git', 'node_modules', 'release', 'dist', 'build']);
+  const walk = (dir) => {
+    if (output.length >= 5000) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (ignored.has(entry.name)) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) output.push(path.relative(root, full).replace(/\\/g, '/'));
+    }
+  };
+  walk(root);
+  return output;
 }
 
 function requireOwner() {
@@ -447,8 +516,11 @@ async function callProvider({ provider, model, messages, systemPrompt, attachmen
 }
 
 async function callProviderWithFallback(request) {
+  enforceUsageLimits();
   try {
-    return await callProvider(request);
+    const result = await callProvider(request);
+    recordUsage(result.usage);
+    return result;
   } catch (primaryError) {
     if (!RETRYABLE_STATUS.has(primaryError.status)) throw primaryError;
     const settings = userSettings(requireLogin().id);
@@ -462,6 +534,7 @@ async function callProviderWithFallback(request) {
       toProvider: fallbackProvider, toModel: fallbackModel
     });
     const result = await callProvider({ ...request, provider: fallbackProvider, model: fallbackModel });
+    recordUsage(result.usage);
     return { ...result, fallbackProvider, fallbackModel };
   }
 }
@@ -879,10 +952,21 @@ function registerIpc() {
   });
 
   ipcMain.handle('settings:get', () => publicSettings(userSettings(requireLogin().id)));
+  ipcMain.handle('logs:get', () => {
+    const user = requireLogin();
+    const logPath = path.join(getDataDir(), 'logs', 'app.jsonl');
+    if (!fs.existsSync(logPath)) return [];
+    return fs.readFileSync(logPath, 'utf8').trim().split(/\r?\n/).slice(-500).map((line) => {
+      try { return JSON.parse(line); } catch (_) { return null; }
+    }).filter((entry) => entry && (user.role === 'owner' || entry.userId === user.id)).map((entry) => {
+      const { apiKey, key, authorization, ...safe } = entry;
+      return safe;
+    });
+  });
   ipcMain.handle('settings:save', (_, payload) => {
     const user = requireLogin();
     const settings = userSettings(user.id);
-    for (const key of ['provider', 'openaiModel', 'geminiModel', 'temperature', 'maxOutputTokens']) {
+    for (const key of ['provider', 'openaiModel', 'geminiModel', 'temperature', 'maxOutputTokens', 'dailyTokenBudget', 'requestsPerMinute']) {
       if (typeof payload[key] !== 'undefined') settings[key] = payload[key];
     }
     settings.apiKeys ||= {};
@@ -913,6 +997,57 @@ function registerIpc() {
     requireLogin();
     clipboard.writeText(String(text || ''));
     return { ok: true };
+  });
+  ipcMain.handle('code:open-folder', async () => {
+    const user = requireWriter();
+    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
+    if (result.canceled) return null;
+    const root = fs.realpathSync(path.resolve(result.filePaths[0]));
+    codeWorkspaces.set(user.id, root);
+    return { root, files: listWorkspaceFiles(root) };
+  });
+  ipcMain.handle('code:read-file', (_, relativePath) => {
+    const user = requireWriter();
+    const file = workspaceFile(user.id, relativePath);
+    const stat = fs.statSync(file.resolved);
+    if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error('รองรับไฟล์ข้อความขนาดไม่เกิน 1 MB');
+    return { path: file.relative.replace(/\\/g, '/'), content: fs.readFileSync(file.resolved, 'utf8') };
+  });
+  ipcMain.handle('code:search', (_, query) => {
+    const user = requireWriter();
+    const root = codeWorkspaces.get(user.id);
+    if (!root) throw new Error('กรุณาเปิดโฟลเดอร์โปรเจกต์ก่อน');
+    const term = String(query || '').toLocaleLowerCase();
+    if (!term) return [];
+    const matches = [];
+    for (const relative of listWorkspaceFiles(root)) {
+      if (matches.length >= 200) break;
+      const full = path.join(root, relative);
+      try {
+        if (fs.statSync(full).size > 1024 * 1024) continue;
+        const lines = fs.readFileSync(full, 'utf8').split(/\r?\n/);
+        lines.forEach((line, index) => {
+          if (matches.length < 200 && line.toLocaleLowerCase().includes(term)) {
+            matches.push({ path: relative, line: index + 1, preview: line.trim().slice(0, 200) });
+          }
+        });
+      } catch (_) {}
+    }
+    return matches;
+  });
+  ipcMain.handle('code:write-file', (_, payload) => {
+    const user = requireWriter();
+    const file = workspaceFile(user.id, payload.path);
+    if (!fs.existsSync(file.resolved) || !fs.statSync(file.resolved).isFile()) throw new Error('ไม่พบไฟล์เดิม');
+    const content = String(payload.content ?? '');
+    if (Buffer.byteLength(content, 'utf8') > 2 * 1024 * 1024) throw new Error('ไฟล์ใหม่ใหญ่เกิน 2 MB');
+    const backupDir = path.join(getDataDir(), 'backups', 'code', String(Date.now()));
+    fs.mkdirSync(backupDir, { recursive: true });
+    const backupPath = path.join(backupDir, path.basename(file.resolved));
+    fs.copyFileSync(file.resolved, backupPath);
+    fs.writeFileSync(file.resolved, content, 'utf8');
+    store.audit('code_file_written', { path: file.relative, backupPath });
+    return { ok: true, backupPath };
   });
 
   ipcMain.handle('rooms:list', () => {

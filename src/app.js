@@ -5,7 +5,8 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 const state = {
   user: null, needsOwner: false, mode: 'normal', settings: null,
   rooms: [], activeRoom: null, attachments: [], jobs: [], activeJob: null, busy: false,
-  noteLoaded: false, noteSaveTimer: null, streamingText: ''
+  noteLoaded: false, noteSaveTimer: null, streamingText: '',
+  codeRoot: '', codeFiles: [], codeFile: null, codeOriginal: ''
 };
 
 function toast(message, type = '') {
@@ -69,6 +70,8 @@ async function loadAppData() {
   $('#temperature').value = state.settings.temperature ?? 0.4;
   $('#temperatureValue').textContent = $('#temperature').value;
   $('#maxOutputTokens').value = state.settings.maxOutputTokens || 4096;
+  $('#dailyTokenBudget').value = state.settings.dailyTokenBudget || 0;
+  $('#requestsPerMinute').value = state.settings.requestsPerMinute || 30;
   renderKeyStatus();
   await Promise.all([loadRooms(), loadJobs()]);
   if (state.rooms.length) await openRoom(state.rooms[0].id);
@@ -154,6 +157,7 @@ function setMode(mode) {
   $('#chatView').classList.toggle('hidden', batch || notepad);
   $('#batchView').classList.toggle('hidden', !batch);
   $('#notepadView').classList.toggle('hidden', !notepad);
+  $('#codeWorkspacePanel').classList.toggle('hidden', mode !== 'code');
   $('#newRoomButton').classList.toggle('hidden', batch || notepad);
   $('#newBatchButton').classList.toggle('hidden', !batch);
   const info = {
@@ -300,7 +304,9 @@ async function saveSettings() {
     state.settings = await window.bossAPI.saveSettings({
       provider: $('#providerSelect').value,
       openaiKey: $('#openaiKey').value.trim(), geminiKey: $('#geminiKey').value.trim(),
-      temperature: Number($('#temperature').value), maxOutputTokens: Number($('#maxOutputTokens').value)
+      temperature: Number($('#temperature').value), maxOutputTokens: Number($('#maxOutputTokens').value),
+      dailyTokenBudget: Number($('#dailyTokenBudget').value),
+      requestsPerMinute: Number($('#requestsPerMinute').value)
     });
     $('#openaiKey').value = ''; $('#geminiKey').value = '';
     $('#settingsDialog').close(); renderKeyStatus();
@@ -427,7 +433,11 @@ $('#modelSelect').addEventListener('change', async () => {
 $('#settingsButton').addEventListener('click', async () => {
   renderKeyStatus();
   $('#settingsDialog').showModal();
-  try { await loadUsers(); } catch (error) { toast(error.message, 'error'); }
+  try {
+    await loadUsers();
+    const logs = await window.bossAPI.getLogs();
+    $('#logViewer').textContent = logs.slice(-100).map((entry) => `${entry.time} ${entry.level} ${entry.event} ${entry.message || ''}`).join('\n');
+  } catch (error) { toast(error.message, 'error'); }
 });
 $('#saveSettings').addEventListener('click', (e) => { e.preventDefault(); saveSettings(); });
 $('#changePasswordButton').addEventListener('click', async () => {
@@ -468,6 +478,58 @@ $('#createUserButton').addEventListener('click', async () => {
     $('#newUserPassword').value = '';
     await loadUsers();
     toast('สร้างผู้ใช้แล้ว', 'success');
+  } catch (error) { toast(error.message, 'error'); }
+});
+$('#openCodeFolder').addEventListener('click', async () => {
+  try {
+    const workspace = await window.bossAPI.openCodeFolder();
+    if (!workspace) return;
+    state.codeRoot = workspace.root;
+    state.codeFiles = workspace.files;
+    $('#codeRoot').textContent = workspace.root;
+    $('#codeFileList').innerHTML = workspace.files.map((file) => `<option value="${escapeHtml(file)}">${escapeHtml(file)}</option>`).join('');
+  } catch (error) { toast(error.message, 'error'); }
+});
+$('#codeFileList').addEventListener('change', async () => {
+  try {
+    const file = await window.bossAPI.readCodeFile($('#codeFileList').value);
+    state.codeFile = file.path;
+    state.codeOriginal = file.content;
+    $('#codeFilePath').textContent = file.path;
+    $('#codeEditor').value = file.content;
+  } catch (error) { toast(error.message, 'error'); }
+});
+$('#searchCodeButton').addEventListener('click', async () => {
+  try {
+    const matches = await window.bossAPI.searchCode($('#codeSearch').value);
+    $('#codeSearchResults').innerHTML = matches.slice(0, 200).map((match) =>
+      `<button type="button" data-code-result="${escapeHtml(match.path)}">${escapeHtml(match.path)}:${match.line} ${escapeHtml(match.preview)}</button>`).join(' ') || 'ไม่พบ';
+    $$('[data-code-result]').forEach((button) => button.addEventListener('click', () => {
+      $('#codeFileList').value = button.dataset.codeResult;
+      $('#codeFileList').dispatchEvent(new Event('change'));
+    }));
+  } catch (error) { toast(error.message, 'error'); }
+});
+$('#attachCodeToChat').addEventListener('click', () => {
+  if (!state.codeFile) return toast('เลือกไฟล์ก่อน', 'error');
+  const content = $('#codeEditor').value;
+  state.attachments.push({ name: state.codeFile, path: state.codeFile, size: new Blob([content]).size, kind: 'text', text: content });
+  renderAttachments();
+  toast('แนบไฟล์เข้าแชทแล้ว', 'success');
+});
+$('#saveCodeFile').addEventListener('click', async () => {
+  if (!state.codeFile) return toast('เลือกไฟล์ก่อน', 'error');
+  const content = $('#codeEditor').value;
+  if (content === state.codeOriginal) return toast('ไฟล์ยังไม่มีการเปลี่ยนแปลง', 'error');
+  const beforeLines = state.codeOriginal.split(/\r?\n/);
+  const afterLines = content.split(/\r?\n/);
+  const changed = Math.max(beforeLines.length, afterLines.length);
+  if (!confirm(`ยืนยันเขียนไฟล์ ${state.codeFile}?\nก่อน: ${beforeLines.length} บรรทัด\nหลัง: ${afterLines.length} บรรทัด\nระบบจะสำรองไฟล์เดิมก่อนเสมอ`)) return;
+  try {
+    const result = await window.bossAPI.writeCodeFile({ path: state.codeFile, content });
+    state.codeOriginal = content;
+    toast(`บันทึกแล้ว (สำรองเดิมไว้แล้ว ${changed} บรรทัดที่ตรวจเปรียบเทียบ)`, 'success');
+    $('#codeFilePath').textContent = `${state.codeFile} · backup: ${result.backupPath}`;
   } catch (error) { toast(error.message, 'error'); }
 });
 $('#temperature').addEventListener('input', () => $('#temperatureValue').textContent = $('#temperature').value);
