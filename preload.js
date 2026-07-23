@@ -19,6 +19,11 @@ contextBridge.exposeInMainWorld('bossAPI', {
   listMessages: (roomId) => ipcRenderer.invoke('messages:list', roomId),
   sendChat: (payload) => ipcRenderer.invoke('chat:send', payload),
   stopChat: () => ipcRenderer.invoke('chat:stop'),
+  onChatDelta: (callback) => {
+    const listener = (_, payload) => callback(payload);
+    ipcRenderer.on('chat:stream-delta', listener);
+    return () => ipcRenderer.removeListener('chat:stream-delta', listener);
+  },
   selectFiles: () => ipcRenderer.invoke('files:select'),
   importBatch: (payload) => ipcRenderer.invoke('batch:import', payload),
   listJobs: () => ipcRenderer.invoke('batch:list'),

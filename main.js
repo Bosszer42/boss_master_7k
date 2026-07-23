@@ -238,6 +238,46 @@ async function apiFetch(url, options = {}, timeoutMs = 180000, maxAttempts = 4, 
   throw lastError;
 }
 
+async function streamSse(url, options, signal, onEvent) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 180000);
+  const effectiveSignal = signal || controller.signal;
+  try {
+    const response = await fetch(url, { ...options, signal: effectiveSignal });
+    if (!response.ok) {
+      const raw = await response.text();
+      let json;
+      try { json = raw ? JSON.parse(raw) : {}; } catch (_) { json = {}; }
+      const error = new Error(json?.error?.message || json?.message || raw || `HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    if (!response.body) throw new Error('Provider did not return a response stream');
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+      let boundary;
+      while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const data = block.split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
+          .join('\n');
+        if (data && data !== '[DONE]') onEvent(data);
+      }
+    }
+    const tail = buffer.trim();
+    if (tail.startsWith('data:')) onEvent(tail.slice(5).trimStart());
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function listModels(provider) {
   const user = requireLogin();
   const settings = userSettings(user.id);
@@ -265,7 +305,7 @@ async function listModels(provider) {
   throw new Error('Provider ไม่รองรับ');
 }
 
-async function callProvider({ provider, model, messages, systemPrompt, attachments, temperature, maxOutputTokens, signal }) {
+async function callProvider({ provider, model, messages, systemPrompt, attachments, temperature, maxOutputTokens, signal, onDelta }) {
   const user = requireLogin();
   const settings = userSettings(user.id);
   const key = decryptSecret(settings.apiKeys?.[provider]);
@@ -281,6 +321,35 @@ async function callProvider({ provider, model, messages, systemPrompt, attachmen
       max_output_tokens: Number(maxOutputTokens || 4096)
     };
     if (systemPrompt) payload.instructions = systemPrompt;
+    if (onDelta) {
+      payload.stream = true;
+      let text = '';
+      let usage = {};
+      let responseId = null;
+      let finishReason = null;
+      await streamSse('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      }, signal, (data) => {
+        let event;
+        try { event = JSON.parse(data); } catch (_) { return; }
+        if (event.type === 'response.output_text.delta' && event.delta) {
+          text += event.delta;
+          onDelta(event.delta);
+        }
+        if (event.type === 'response.completed' && event.response) {
+          usage = event.response.usage || {};
+          responseId = event.response.id || null;
+          finishReason = event.response.status || 'completed';
+        }
+        if (event.type === 'error') throw new Error(event.error?.message || event.message || 'OpenAI streaming error');
+      });
+      return { text, usage, responseId, finishReason };
+    }
     const json = await apiFetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
@@ -311,6 +380,34 @@ async function callProvider({ provider, model, messages, systemPrompt, attachmen
       }
     };
     if (systemPrompt) payload.systemInstruction = { parts: [{ text: systemPrompt }] };
+    if (onDelta) {
+      let text = '';
+      let usage = {};
+      let responseId = null;
+      let finishReason = null;
+      await streamSse(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(key)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        },
+        signal,
+        (data) => {
+          let chunk;
+          try { chunk = JSON.parse(data); } catch (_) { return; }
+          const delta = (chunk.candidates?.[0]?.content?.parts || []).map((part) => part.text || '').join('');
+          if (delta) {
+            text += delta;
+            onDelta(delta);
+          }
+          usage = chunk.usageMetadata || usage;
+          responseId = chunk.responseId || responseId;
+          finishReason = chunk.candidates?.[0]?.finishReason || finishReason;
+        }
+      );
+      return { text, usage, responseId, finishReason };
+    }
     const json = await apiFetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
       {
@@ -689,7 +786,7 @@ function registerIpc() {
     if (!room) throw new Error('ไม่พบห้อง');
     return store.data.messages.filter((m) => m.roomId === roomId).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   });
-  ipcMain.handle('chat:send', async (_, payload) => {
+  ipcMain.handle('chat:send', async (event, payload) => {
     const user = requireLogin();
     const room = store.data.rooms.find((r) => r.id === payload.roomId && r.userId === user.id);
     if (!room) throw new Error('ไม่พบห้อง');
@@ -732,7 +829,12 @@ function registerIpc() {
         attachments,
         temperature: Number(payload.temperature),
         maxOutputTokens: Number(payload.maxOutputTokens),
-        signal: activeChatAbortController.signal
+        signal: activeChatAbortController.signal,
+        onDelta: (delta) => {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send('chat:stream-delta', { roomId: room.id, delta });
+          }
+        }
       });
       const assistantMessage = {
         id: crypto.randomUUID(), roomId: room.id, role: 'assistant', content: response.text,

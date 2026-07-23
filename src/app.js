@@ -5,7 +5,7 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 const state = {
   user: null, needsOwner: false, mode: 'normal', settings: null,
   rooms: [], activeRoom: null, attachments: [], jobs: [], activeJob: null, busy: false,
-  noteLoaded: false, noteSaveTimer: null
+  noteLoaded: false, noteSaveTimer: null, streamingText: ''
 };
 
 function toast(message, type = '') {
@@ -133,6 +133,19 @@ function renderMessages(messages) {
   $('#messageList').scrollTop = $('#messageList').scrollHeight;
 }
 
+function renderStreamingMessage() {
+  let article = $('#streamingAssistantMessage');
+  if (!article) {
+    article = document.createElement('article');
+    article.id = 'streamingAssistantMessage';
+    article.className = 'message assistant';
+    article.innerHTML = '<div class="avatar">AI</div><div class="bubble"><div class="stream-content"></div><div class="message-meta">กำลังตอบ…</div></div>';
+    $('#messageList').appendChild(article);
+  }
+  article.querySelector('.stream-content').innerHTML = renderRichText(state.streamingText);
+  $('#messageList').scrollTop = $('#messageList').scrollHeight;
+}
+
 function setMode(mode) {
   state.mode = mode;
   $$('.mode').forEach((button) => button.classList.toggle('active', button.dataset.mode === mode));
@@ -210,6 +223,7 @@ async function sendMessage() {
   if (!model) return toast('กรุณาเลือกโมเดลก่อน', 'error');
   if (!state.activeRoom) await createRoom();
   state.busy = true;
+  state.streamingText = '';
   $('#sendButton').classList.add('hidden');
   $('#stopButton').classList.remove('hidden');
   $('#stopButton').disabled = false;
@@ -237,12 +251,19 @@ async function sendMessage() {
     }
     await openRoom(state.activeRoom.id);
   } finally {
+    state.streamingText = '';
     state.busy = false;
     $('#sendButton').classList.remove('hidden');
     $('#stopButton').classList.add('hidden');
     $('#stopButton').disabled = true;
   }
 }
+
+window.bossAPI.onChatDelta(({ roomId, delta }) => {
+  if (!state.busy || state.activeRoom?.id !== roomId) return;
+  state.streamingText += String(delta || '');
+  renderStreamingMessage();
+});
 
 async function selectAttachments() {
   try {
