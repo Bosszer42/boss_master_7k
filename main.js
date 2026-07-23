@@ -5,6 +5,9 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const XLSX = require('xlsx');
+const pdfParse = require('pdf-parse');
+const mammoth = require('mammoth');
+const AdmZip = require('adm-zip');
 
 let mainWindow;
 let currentUserId = null;
@@ -451,16 +454,28 @@ async function callProviderWithFallback(request) {
   }
 }
 
-function extractPdfText(buffer) {
-  const raw = buffer.toString('latin1');
-  const matches = [...raw.matchAll(/\((?:\\.|[^()\\])*\)/g)]
-    .map((match) => match[0])
-    .map((value) => value.replace(/^\(/, '').replace(/\)$/,'').replace(/\\([()\\])/g, '$1'))
-    .filter((value) => value.trim().length > 1);
-  return matches.slice(0, 40).join(' ').replace(/\s+/g, ' ').trim().slice(0, 250000);
+async function readZipSafely(buffer, archiveName) {
+  const entries = new AdmZip(buffer).getEntries();
+  if (entries.length > 100) throw new Error(`ZIP ${archiveName} มีไฟล์เกิน 100 รายการ`);
+  let totalBytes = 0;
+  let output = '';
+  const allowedText = new Set(['.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm', '.css', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.php', '.py', '.ps1', '.bat', '.cmd', '.sql', '.yaml', '.yml', '.ini', '.log']);
+  for (const entry of entries) {
+    if (entry.isDirectory) continue;
+    const normalized = String(entry.entryName || '').replace(/\\/g, '/');
+    if (!normalized || normalized.startsWith('/') || /^[a-z]:/i.test(normalized) || normalized.split('/').includes('..')) {
+      throw new Error(`ZIP ${archiveName} มี path ที่ไม่ปลอดภัย: ${normalized || '(empty)'}`);
+    }
+    totalBytes += Number(entry.header?.size || 0);
+    if (totalBytes > 10 * 1024 * 1024) throw new Error(`ZIP ${archiveName} มีข้อมูลหลังแตกเกิน 10 MB`);
+    if (!allowedText.has(path.extname(normalized).toLowerCase())) continue;
+    output += `${output ? '\n\n' : ''}--- ZIP FILE: ${normalized} ---\n${entry.getData().toString('utf8').slice(0, 100000)}`;
+    if (output.length >= MAX_CONTEXT_CHARS) break;
+  }
+  return output.slice(0, MAX_CONTEXT_CHARS) || `[ZIP ${archiveName}: ไม่มีไฟล์ข้อความที่รองรับ และไม่มีการรันไฟล์ภายใน]`;
 }
 
-function readAttachment(filePath) {
+async function readAttachment(filePath) {
   const stat = fs.statSync(filePath);
   if (stat.size > MAX_ATTACHMENT_BYTES) throw new Error(`ไฟล์ ${path.basename(filePath)} ใหญ่เกิน ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB ในรุ่น Alpha`);
   const ext = path.extname(filePath).toLowerCase();
@@ -493,15 +508,16 @@ function readAttachment(filePath) {
     return { name, path: filePath, size: stat.size, kind: 'text', text: fs.readFileSync(filePath, 'utf8').slice(0, MAX_CONTEXT_CHARS) };
   }
   if (ext === '.pdf') {
-    const buffer = fs.readFileSync(filePath);
-    const text = extractPdfText(buffer);
-    return { name, path: filePath, size: stat.size, kind: 'text', text: text || `[PDF ${name} ถูกอ่านเป็นข้อความอย่างเบา ๆ แล้ว แต่สรุปสาระยังต้องมีการทดสอบกับ API จริง]` };
+    const result = await pdfParse(fs.readFileSync(filePath));
+    return { name, path: filePath, size: stat.size, kind: 'text', text: String(result.text || '').slice(0, MAX_CONTEXT_CHARS) };
   }
   if (ext === '.docx') {
-    return { name, path: filePath, size: stat.size, kind: 'binary', text: `[DOCX ${name} ถูกยอมรับให้แนบได้ แต่เนื้อหาใน Alpha ยังไม่แปลงข้อความอัตโนมัติเต็มรูปแบบ]` };
+    const result = await mammoth.extractRawText({ path: filePath });
+    return { name, path: filePath, size: stat.size, kind: 'text', text: String(result.value || '').slice(0, MAX_CONTEXT_CHARS) };
   }
   if (ext === '.zip') {
-    return { name, path: filePath, size: stat.size, kind: 'binary', text: `[ZIP ${name} ถูกบล็อกเพื่อความปลอดภัย ไม่อนุญาตให้เปิดหรือรันไฟล์ภายใน]` };
+    const text = await readZipSafely(fs.readFileSync(filePath), name);
+    return { name, path: filePath, size: stat.size, kind: 'text', text };
   }
   return { name, path: filePath, size: stat.size, kind: 'binary', text: `[ไฟล์แนบ ${name} ยังไม่รองรับการอ่านข้อความในรุ่น Alpha]` };
 }
@@ -869,7 +885,7 @@ function registerIpc() {
       ]
     });
     if (result.canceled) return [];
-    return result.filePaths.map(readAttachment);
+    return Promise.all(result.filePaths.map(readAttachment));
   });
 
   ipcMain.handle('batch:import', async (_, payload) => {
