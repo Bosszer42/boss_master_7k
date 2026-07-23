@@ -846,6 +846,17 @@ function registerIpc() {
     appVersion: app.getVersion()
   }));
 
+  ipcMain.handle('app:open-external-link', async (_, url) => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:') throw new Error('รองรับเฉพาะลิงก์ HTTPS เท่านั้น');
+      await shell.openExternal(parsed.toString());
+      return { ok: true };
+    } catch (error) {
+      throw new Error(error.message || 'ไม่สามารถเปิดลิงก์ภายนอกได้');
+    }
+  });
+
   ipcMain.handle('auth:create-owner', (_, payload) => {
     if (store.data.users.length) throw new Error('มีบัญชี Owner แล้ว');
     if (!payload.username || payload.username.length < 3) throw new Error('Username ต้องมีอย่างน้อย 3 ตัวอักษร');

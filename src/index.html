@@ -138,25 +138,17 @@
     </main>
 
     <aside class="inspector">
-      <div class="inspector-tabs"><button class="active">เครื่องมือ</button><button>ข้อมูลห้อง</button></div>
-      <section>
-        <h3>ผู้ช่วย AI</h3>
-        <select id="assistantPreset"><option value="general">ทั่วไป (Default)</option><option value="code">Code Assistant</option><option value="strict">Strict Data Processor</option></select>
-      </section>
-      <section>
-        <h3>System Prompt</h3>
-        <textarea id="systemPrompt" rows="7" placeholder="เว้นว่างสำหรับแชทธรรมดา"></textarea>
-      </section>
-      <section>
-        <h3>ตั้งค่าคำตอบ</h3>
-        <label>Temperature <output id="temperatureValue">0.4</output><input id="temperature" type="range" min="0" max="1" step="0.1" value="0.4" /></label>
-        <label>Max output tokens<input id="maxOutputTokens" type="number" min="256" max="65536" value="4096" /></label>
-      </section>
+      <div class="inspector-tabs">
+        <button id="inspectorToolsTab" class="active" type="button">เครื่องมือ</button>
+        <button id="inspectorRoomTab" type="button">ข้อมูลห้อง</button>
+      </div>
+      <div id="inspectorToolsPanel"></div>
+      <div id="inspectorRoomPanel" class="hidden"></div>
       <section class="mode-info" id="modeInfo"><h3>แชทธรรมดา</h3><p>ไม่มีคิว ไม่มี Validator และไม่บังคับรูปแบบผลลัพธ์</p></section>
     </aside>
 
     <footer class="statusbar">
-      <span id="connectionStatus">● พร้อมตั้งค่า API</span><span id="contextStatus">ห้อง: -</span><span id="versionStatus">v0.2.2</span>
+      <span id="connectionStatus">● พร้อมตั้งค่า API</span><span id="contextStatus">ห้อง: -</span><span id="versionStatus">v0.2.3</span>
     </footer>
   </div>
 

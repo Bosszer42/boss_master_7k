@@ -6,7 +6,8 @@ const state = {
   user: null, needsOwner: false, mode: 'normal', settings: null,
   rooms: [], activeRoom: null, attachments: [], jobs: [], activeJob: null, busy: false,
   noteLoaded: false, noteSaveTimer: null, streamingText: '', streamingStarted: false,
-  codeRoot: '', codeFiles: [], codeFile: null, codeOriginal: ''
+  codeRoot: '', codeFiles: [], codeFile: null, codeOriginal: '',
+  projects: [], selectedProjectId: null, recentFiles: [], inspectorTab: 'tools', roomSearchText: ''
 };
 
 function showActivity(title = 'กำลังทำงาน...', detail = 'กรุณารอสักครู่') {
@@ -33,12 +34,142 @@ function toast(message, type = '') {
 }
 
 function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#039;','"':'&quot;' }[char]));
+  return String(value ?? '').replace(/[&<>\"']/g, (char) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#039;' }[char]));
+}
+
+function formatInlineMarkdown(text) {
+  let result = escapeHtml(text);
+  result = result.replace(/`([^`]+)`/g, (_, code) => `<code>${escapeHtml(code)}</code>`);
+  result = result.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => `<a href="#" class="message-link" data-external-link="${escapeHtml(url)}">${escapeHtml(label)}</a>`);
+  result = result.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  result = result.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  result = result.replace(/\n/g, '<br />');
+  return result;
 }
 
 function renderRichText(text) {
-  const safe = escapeHtml(text);
-  return safe.replace(/```([\w-]*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre><code data-lang="${escapeHtml(lang)}">${code}</code></pre>`);
+  const source = String(text ?? '');
+  const lines = source.split(/\r?\n/);
+  const blocks = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i += 1; continue; }
+    if (/^```/.test(line.trim())) {
+      const lang = line.trim().slice(3).trim();
+      const codeLines = [];
+      i += 1;
+      while (i < lines.length && !/^```/.test(lines[i].trim())) { codeLines.push(lines[i]); i += 1; }
+      i += 1;
+      blocks.push(`<div class="code-block"><div class="code-toolbar"><span>${escapeHtml(lang || 'code')}</span><button type="button" class="code-copy" data-copy-code="${escapeHtml(codeLines.join('\n'))}">คัดลอก</button></div><pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre></div>`);
+      continue;
+    }
+    if (/^#{1,4}\s+/.test(line)) {
+      const level = line.match(/^#+/)[0].length;
+      blocks.push(`<h${Math.min(level, 4)}>${formatInlineMarkdown(line.replace(/^#{1,4}\s+/, ''))}</h${Math.min(level, 4)}>`);
+      i += 1;
+      continue;
+    }
+    if (/^>\s?/.test(line)) {
+      const quoteLines = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) { quoteLines.push(lines[i].replace(/^>\s?/, '').trim()); i += 1; }
+      blocks.push(`<blockquote>${quoteLines.map((part) => `<p>${formatInlineMarkdown(part)}</p>`).join('')}</blockquote>`);
+      continue;
+    }
+    if (/^[-*]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^[-*]\s+/.test(lines[i])) { items.push(`<li>${formatInlineMarkdown(lines[i].replace(/^[-*]\s+/, ''))}</li>`); i += 1; }
+      blocks.push(`<ul>${items.join('')}</ul>`);
+      continue;
+    }
+    if (/^\d+\.\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i])) { items.push(`<li>${formatInlineMarkdown(lines[i].replace(/^\d+\.\s+/, ''))}</li>`); i += 1; }
+      blocks.push(`<ol>${items.join('')}</ol>`);
+      continue;
+    }
+    if (/^(\|.*\|)(\s*$)/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[i + 1])) {
+      const rows = [];
+      rows.push(line.split('|').slice(1, -1).map((cell) => cell.trim()));
+      i += 2;
+      while (i < lines.length && /^(\|.*\|)(\s*$)/.test(lines[i])) { rows.push(lines[i].split('|').slice(1, -1).map((cell) => cell.trim())); i += 1; }
+      const header = rows[0];
+      const body = rows.slice(1);
+      blocks.push(`<table><thead><tr>${header.map((cell) => `<th>${formatInlineMarkdown(cell)}</th>`).join('')}</tr></thead><tbody>${body.map((row) => `<tr>${row.map((cell) => `<td>${formatInlineMarkdown(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
+      continue;
+    }
+    const paragraphLines = [];
+    while (i < lines.length && lines[i].trim() && !/^```/.test(lines[i].trim()) && !/^#{1,4}\s+/.test(lines[i]) && !/^>\s?/.test(lines[i]) && !/^[-*]\s+/.test(lines[i]) && !/^\d+\.\s+/.test(lines[i]) && !(/^(\|.*\|)(\s*$)/.test(lines[i]) && i + 1 < lines.length && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[i + 1]))) { paragraphLines.push(lines[i]); i += 1; }
+    if (paragraphLines.length) {
+      blocks.push(`<p>${paragraphLines.map((part) => formatInlineMarkdown(part)).join('<br />')}</p>`);
+      continue;
+    }
+    i += 1;
+  }
+  return blocks.join('');
+}
+
+function renderMessageBubble(message) {
+  const content = renderRichText(message.content);
+  const meta = message.role === 'assistant' ? `${escapeHtml(message.provider || '')} ${escapeHtml(message.model || '')}` : 'คุณ';
+  const timeLabel = new Date(message.createdAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+  return `<article class="message ${message.role}">
+    ${message.role === 'assistant' ? '<div class="avatar">AI</div>' : ''}
+    <div class="bubble">
+      <div class="message-actions">
+        <button type="button" class="tiny-action" data-copy-message="${escapeHtml(message.id || '')}" title="คัดลอกข้อความ" aria-label="คัดลอกข้อความ">⧉</button>
+        ${message.role === 'assistant' ? '<button type="button" class="tiny-action" data-scroll-bottom title="ไปคำตอบล่าสุด" aria-label="ไปคำตอบล่าสุด">↓</button>' : ''}
+      </div>
+      <div class="message-body">${content}</div>
+      <div class="message-meta">${meta} · ${timeLabel}</div>
+    </div>
+  </article>`;
+}
+
+function loadStoredUiState() {
+  try {
+    const projects = JSON.parse(localStorage.getItem('bossmaster-projects') || '[]');
+    const recentFiles = JSON.parse(localStorage.getItem('bossmaster-recent-files') || '[]');
+    state.projects = Array.isArray(projects) ? projects : [];
+    state.recentFiles = Array.isArray(recentFiles) ? recentFiles : [];
+  } catch (_) {}
+}
+
+function persistUiState() {
+  localStorage.setItem('bossmaster-projects', JSON.stringify(state.projects));
+  localStorage.setItem('bossmaster-recent-files', JSON.stringify(state.recentFiles));
+}
+
+function bindRichTextEvents() {
+  $$('.code-copy').forEach((button) => button.addEventListener('click', async () => {
+    const text = button.dataset.copyCode || '';
+    if (!text) return;
+    await copyTextToClipboard(text, 'คัดลอก Code Block แล้ว');
+  }));
+  $$('.message-link').forEach((link) => link.addEventListener('click', (event) => {
+    event.preventDefault();
+    const url = link.dataset.externalLink;
+    if (url) openExternalLink(url);
+  }));
+  $$('.message-action-copy').forEach((button) => button.addEventListener('click', async () => {
+    const messageId = button.dataset.copyMessage;
+    const message = state.activeRoom ? (state.messagesByRoom?.[state.activeRoom.id] || []).find((item) => item.id === messageId) : null;
+    if (!message) return;
+    await copyTextToClipboard(message.content, 'คัดลอกข้อความแล้ว');
+  }));
+}
+
+async function copyTextToClipboard(text, successMessage = 'คัดลอกแล้ว') {
+  try {
+    await window.bossAPI.copyText(text);
+    toast(successMessage, 'success');
+  } catch (error) { toast(error.message, 'error'); }
+}
+
+async function openExternalLink(url) {
+  try {
+    await window.bossAPI.openExternalLink(url);
+  } catch (error) { toast(error.message, 'error'); }
 }
 
 async function bootstrap() {
@@ -117,12 +248,20 @@ async function loadRooms() {
 
 function renderRooms() {
   const query = $('#roomSearch').value.trim().toLowerCase();
-  const rooms = state.rooms.filter((r) => !query || r.title.toLowerCase().includes(query));
+  const rooms = state.rooms.filter((room) => {
+    const haystack = [room.title, room.mode, room.projectName || '', room.systemPrompt || '', room.updatedAt || ''].join(' ').toLowerCase();
+    return !query || haystack.includes(query);
+  });
   $('#roomCount').textContent = state.rooms.length;
+  if (!rooms.length) {
+    $('#roomList').innerHTML = `<div class="empty-sidebar">ไม่พบห้องที่ตรงกับคำค้นหา<button type="button" class="link-button" id="clearRoomSearch">ล้างคำค้นหา</button></div>`;
+    $('#clearRoomSearch').addEventListener('click', () => { $('#roomSearch').value = ''; state.roomSearchText = ''; renderRooms(); });
+    return;
+  }
   $('#roomList').innerHTML = rooms.map((room) => `
     <button class="room-item ${state.activeRoom?.id === room.id ? 'active' : ''}" data-room-id="${room.id}">
-      <span class="room-icon">${room.mode === 'code' ? '&lt;/&gt;' : '◉'}</span>
-      <span class="room-text"><strong>${escapeHtml(room.title)}</strong><small>${room.mode === 'code' ? 'เขียนโค้ด' : 'แชทธรรมดา'}</small></span>
+      <span class="room-icon">${room.mode === 'code' ? '&lt;/&gt;' : room.mode === 'batch' ? '▦' : room.mode === 'notepad' ? '▤' : '◉'}</span>
+      <span class="room-text"><strong>${escapeHtml(room.title)}</strong><small>${room.projectName ? `${escapeHtml(room.projectName)} · ` : ''}${room.mode === 'code' ? 'เขียนโค้ด' : room.mode === 'batch' ? 'งานจำนวนมาก' : room.mode === 'notepad' ? 'Notepad' : 'แชทธรรมดา'}</small></span>
     </button>`).join('');
   $$('.room-item').forEach((button) => button.addEventListener('click', () => openRoom(button.dataset.roomId)));
 }
@@ -146,15 +285,14 @@ async function openRoom(id) {
 }
 
 function renderMessages(messages) {
+  state.messagesByRoom = state.messagesByRoom || {};
+  state.messagesByRoom[state.activeRoom?.id || ''] = messages;
   if (!messages.length) {
     $('#messageList').innerHTML = `<div class="welcome"><div class="ai-orb">AI</div><h2>${state.mode === 'code' ? 'Code Workspace' : 'เริ่มบทสนทนาใหม่'}</h2><p>${state.mode === 'code' ? 'แนบไฟล์โค้ดหรือวางโค้ด แล้วขอให้ตรวจ แก้ หรืออธิบาย' : 'ถามตอบได้เหมือนแชทปกติ โดยไม่มีระบบ Batch ปนอยู่'}</p></div>`;
     return;
   }
-  $('#messageList').innerHTML = messages.map((message) => `
-    <article class="message ${message.role}">
-      ${message.role === 'assistant' ? '<div class="avatar">AI</div>' : ''}
-      <div class="bubble">${renderRichText(message.content)}<div class="message-meta">${message.role === 'assistant' ? `${escapeHtml(message.provider || '')} ${escapeHtml(message.model || '')}` : 'คุณ'} · ${new Date(message.createdAt).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'})}</div></div>
-    </article>`).join('');
+  $('#messageList').innerHTML = messages.map((message) => renderMessageBubble(message)).join('');
+  bindRichTextEvents();
   $('#messageList').scrollTop = $('#messageList').scrollHeight;
 }
 
@@ -187,6 +325,7 @@ function setMode(mode) {
   $('#codeWorkspacePanel').classList.toggle('hidden', mode !== 'code');
   $('#newRoomButton').classList.toggle('hidden', batch || notepad);
   $('#newBatchButton').classList.toggle('hidden', !batch);
+  updateInspectorContent();
   const info = {
     normal: ['แชทธรรมดา','ไม่มีคิว ไม่มี Validator และไม่บังคับรูปแบบผลลัพธ์'],
     code: ['เขียนโค้ด','แยกจากกฎเนื้อหา รองรับแนบไฟล์โค้ดและบทสนทนาต่อเนื่อง'],
@@ -448,6 +587,73 @@ function updateJob(job) {
 
 function updateCharCount() { $('#charCount').textContent = `${$('#composer').value.length.toLocaleString()} ตัวอักษร`; }
 
+function updateInspectorContent() {
+  const toolsTab = $('#inspectorToolsTab');
+  const roomTab = $('#inspectorRoomTab');
+  const toolsPanel = $('#inspectorToolsPanel');
+  const roomPanel = $('#inspectorRoomPanel');
+  if (!toolsTab || !roomTab || !toolsPanel || !roomPanel) return;
+  toolsTab.classList.toggle('active', state.inspectorTab === 'tools');
+  roomTab.classList.toggle('active', state.inspectorTab === 'room');
+  toolsPanel.classList.toggle('hidden', state.inspectorTab !== 'tools');
+  roomPanel.classList.toggle('hidden', state.inspectorTab !== 'room');
+  if (state.inspectorTab === 'tools') {
+    const room = state.activeRoom;
+    if (state.mode === 'notepad') {
+      toolsPanel.innerHTML = `
+        <section>
+          <h3>Notepad</h3>
+          <div class="inspector-stat"><span>ตัวอักษร</span><strong>${$('#notepadEditor').value.length}</strong></div>
+          <div class="inspector-stat"><span>คำ</span><strong>${$('#notepadEditor').value.trim().split(/\s+/).filter(Boolean).length}</strong></div>
+          <div class="inspector-stat"><span>สถานะ</span><strong>${$('#notepadSaveStatus').textContent}</strong></div>
+        </section>`;
+      return;
+    }
+    toolsPanel.innerHTML = `
+      <section>
+        <h3>${state.mode === 'code' ? 'Code Assistant' : state.mode === 'batch' ? 'Job Settings' : 'Assistant'}</h3>
+        <label>Preset<select id="assistantPreset"><option value="general">ทั่วไป (Default)</option><option value="code">Code Assistant</option><option value="strict">Strict Data Processor</option></select></label>
+        ${state.mode === 'code' ? '<div class="hint">โหมดเขียนโค้ดจะใช้คำสั่งเฉพาะสำหรับการตรวจและแก้ไฟล์</div>' : ''}
+        ${state.mode === 'batch' ? '<div class="hint">Batch ใช้ Model, Retry และ Batch Size ที่เลือกในหน้างาน</div>' : ''}
+      </section>
+      <section>
+        <h3>System Prompt</h3>
+        <textarea id="systemPrompt" rows="7" placeholder="เว้นว่างสำหรับแชทธรรมดา"></textarea>
+      </section>
+      <section>
+        <h3>ตั้งค่าคำตอบ</h3>
+        <label>Temperature <output id="temperatureValue">0.4</output><input id="temperature" type="range" min="0" max="1" step="0.1" value="0.4" /></label>
+        <label>Max output tokens<input id="maxOutputTokens" type="number" min="256" max="65536" value="4096" /></label>
+      </section>`;
+    $('#assistantPreset').value = $('#assistantPreset').value || 'general';
+    $('#systemPrompt').value = room?.systemPrompt || '';
+    return;
+  }
+  if (state.inspectorTab === 'room') {
+    const room = state.activeRoom;
+    roomPanel.innerHTML = `
+      <section>
+        <h3>ข้อมูลห้อง</h3>
+        <div class="inspector-room-card">
+          <div><strong>${escapeHtml(room?.title || 'ยังไม่มีห้อง')}</strong></div>
+          <div class="hint">ประเภท: ${room?.mode === 'code' ? 'เขียนโค้ด' : room?.mode === 'batch' ? 'งานจำนวนมาก' : room?.mode === 'notepad' ? 'Notepad' : 'แชท'}</div>
+          <div class="hint">Provider: ${escapeHtml(state.settings?.provider || '-')}</div>
+          <div class="hint">Model: ${escapeHtml($('#modelSelect').value || '-')}</div>
+          <div class="hint">สร้าง: ${room?.createdAt ? new Date(room.createdAt).toLocaleString('th-TH') : '-'}</div>
+          <div class="hint">แก้ไขล่าสุด: ${room?.updatedAt ? new Date(room.updatedAt).toLocaleString('th-TH') : '-'}</div>
+          <div class="hint">ข้อความ: ${(state.messagesByRoom?.[room?.id] || []).length}</div>
+          <div class="hint">ไฟล์แนบ: ${state.attachments.length}</div>
+        </div>
+      </section>
+      <section class="dialog-actions">
+        <button type="button" id="copyRoomTitle">คัดลอกชื่อห้อง</button>
+        <button type="button" id="renameRoomInspector">เปลี่ยนชื่อ</button>
+      </section>`;
+    $('#copyRoomTitle').addEventListener('click', async () => { if (state.activeRoom) await copyTextToClipboard(state.activeRoom.title, 'คัดลอกชื่อห้องแล้ว'); });
+    $('#renameRoomInspector').addEventListener('click', async () => { if (!state.activeRoom) return; const title = prompt('ชื่อห้องใหม่', state.activeRoom.title); if (!title) return; state.activeRoom = await window.bossAPI.updateRoom({ id: state.activeRoom.id, patch: { title } }); await loadRooms(); await openRoom(state.activeRoom.id); });
+  }
+}
+
 $('#authButton').addEventListener('click', authAction);
 $('#password').addEventListener('keydown', (e) => { if (e.key === 'Enter') authAction(); });
 $('#logoutButton').addEventListener('click', async () => { await window.bossAPI.logout(); location.reload(); });
@@ -455,7 +661,7 @@ $$('.mode').forEach((button) => button.addEventListener('click', () => setMode(b
 $('#newRoomButton').addEventListener('click', createRoom);
 $('#newBatchButton').addEventListener('click', () => $('#batchDialog').showModal());
 $('#openBatchWizard').addEventListener('click', () => $('#batchDialog').showModal());
-$('#roomSearch').addEventListener('input', renderRooms);
+$('#roomSearch').addEventListener('input', () => { state.roomSearchText = $('#roomSearch').value; renderRooms(); });
 $('#composer').addEventListener('input', updateCharCount);
 $('#composer').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendMessage(); });
 $('#sendButton').addEventListener('click', sendMessage);
@@ -599,6 +805,8 @@ $('#renameRoom').addEventListener('click', async () => {
   if (!state.activeRoom) return; const title = prompt('ชื่อห้องใหม่', state.activeRoom.title); if (!title) return;
   state.activeRoom = await window.bossAPI.updateRoom({ id: state.activeRoom.id, patch: { title } }); await loadRooms(); await openRoom(state.activeRoom.id);
 });
+$('#inspectorToolsTab').addEventListener('click', () => { state.inspectorTab = 'tools'; updateInspectorContent(); });
+$('#inspectorRoomTab').addEventListener('click', () => { state.inspectorTab = 'room'; updateInspectorContent(); });
 $('#deleteRoom').addEventListener('click', async () => {
   if (!state.activeRoom || !confirm(`ลบห้อง “${state.activeRoom.title}” หรือไม่`)) return;
   await window.bossAPI.deleteRoom(state.activeRoom.id); state.activeRoom = null; await loadRooms(); if (state.rooms.length) openRoom(state.rooms[0].id); else createRoom();

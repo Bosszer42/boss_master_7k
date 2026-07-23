@@ -47,5 +47,6 @@ contextBridge.exposeInMainWorld('bossAPI', {
     const listener = (_, job) => callback(job);
     ipcRenderer.on('batch:updated', listener);
     return () => ipcRenderer.removeListener('batch:updated', listener);
-  }
+  },
+  openExternalLink: (url) => ipcRenderer.invoke('app:open-external-link', url)
 });
