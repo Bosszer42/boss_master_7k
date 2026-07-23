@@ -234,11 +234,12 @@ async function loadAppData() {
 
 function renderKeyStatus() {
   if (!state.settings) return;
-  $('#keyStatus').textContent = `OpenAI: ${state.settings.hasOpenAIKey ? 'บันทึกแล้ว' : 'ยังไม่มี'} | Gemini: ${state.settings.hasGeminiKey ? 'บันทึกแล้ว' : 'ยังไม่มี'}`;
   const provider = $('#providerSelect').value;
-  const ready = provider === 'openai' ? state.settings.hasOpenAIKey : state.settings.hasGeminiKey;
-  $('#connectionStatus').textContent = ready ? `● ${provider} พร้อมใช้งาน` : `● ยังไม่ได้ตั้ง Key ของ ${provider}`;
-  $('#connectionStatus').style.color = ready ? '#66dda2' : '#ffb64c';
+  const hasKey = provider === 'openai' ? state.settings.hasOpenAIKey : state.settings.hasGeminiKey;
+  const modeLabel = hasKey ? 'Live API' : 'รอเพิ่ม Key จริง';
+  $('#keyStatus').textContent = `OpenAI: ${state.settings.hasOpenAIKey ? 'บันทึกแล้ว' : 'ยังไม่มี'} | Gemini: ${state.settings.hasGeminiKey ? 'บันทึกแล้ว' : 'ยังไม่มี'} | โหมด: ${modeLabel}`;
+  $('#connectionStatus').textContent = hasKey ? `● ${provider} พร้อมใช้งาน` : `● ${provider}: รอผู้ใช้เพิ่ม API Key จริง (Mock test พร้อมใช้งาน)`;
+  $('#connectionStatus').style.color = hasKey ? '#66dda2' : '#ffb64c';
 }
 
 async function loadRooms() {
@@ -496,6 +497,20 @@ async function saveSettings() {
   finally { hideActivity(); }
 }
 
+async function runLiveApiTest() {
+  try {
+    const provider = $('#providerSelect').value;
+    const result = await window.bossAPI.testLiveApi({ provider, scenario: 'success', model: $('#modelSelect').value || (provider === 'openai' ? 'gpt-4.1-mini' : 'gemini-2.0-flash'), message: 'ทดสอบการเชื่อมต่อแบบสั้น' });
+    if (result.ok) {
+      toast(`Live API Test: ${result.message}`, 'success');
+    } else {
+      toast(result.message, 'warning');
+    }
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
 async function loadUsers() {
   if (state.user?.role !== 'owner') return;
   const users = await window.bossAPI.listUsers();
@@ -674,6 +689,38 @@ $('#stopButton').addEventListener('click', async () => {
 $('#attachButton').addEventListener('click', selectAttachments);
 $('#clearAttachments').addEventListener('click', () => { state.attachments = []; renderAttachments(); });
 $('#refreshModels').addEventListener('click', () => refreshModels(true));
+$('#settingsButton').addEventListener('click', async () => {
+  const dialog = $('#settingsDialog');
+  if (!dialog) return;
+  state.settings = await window.bossAPI.getSettings();
+  renderKeyStatus();
+  $('#openaiKey').value = '';
+  $('#geminiKey').value = '';
+  $('#dailyTokenBudget').value = state.settings.dailyTokenBudget || 0;
+  $('#requestsPerMinute').value = state.settings.requestsPerMinute || 30;
+  dialog.showModal();
+});
+$('#testLiveApiButton').addEventListener('click', runLiveApiTest);
+$('#loadRealModelsButton').addEventListener('click', () => refreshModels(true));
+$('#saveSettings').addEventListener('click', async () => {
+  const payload = {
+    provider: $('#providerSelect').value,
+    openaiModel: $('#modelSelect').value,
+    geminiModel: $('#modelSelect').value,
+    temperature: Number($('#temperature').value || 0.4),
+    maxOutputTokens: Number($('#maxOutputTokens').value || 4096),
+    dailyTokenBudget: Number($('#dailyTokenBudget').value || 0),
+    requestsPerMinute: Number($('#requestsPerMinute').value || 30),
+    openaiKey: $('#openaiKey').value || undefined,
+    geminiKey: $('#geminiKey').value || undefined
+  };
+  state.settings = await window.bossAPI.saveSettings(payload);
+  renderKeyStatus();
+  toast('บันทึกค่าตั้งค่าแล้ว', 'success');
+});
+$('#settingsDialog').addEventListener('close', () => {
+  renderKeyStatus();
+});
 $('#providerSelect').addEventListener('change', async () => { renderKeyStatus(); await refreshModels(false); });
 $('#modelSelect').addEventListener('change', async () => {
   const provider = $('#providerSelect').value;

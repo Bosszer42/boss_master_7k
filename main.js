@@ -8,6 +8,7 @@ const XLSX = require('xlsx');
 const pdfParse = require('pdf-parse');
 const mammoth = require('mammoth');
 const AdmZip = require('adm-zip');
+const { createMockApiHarness, sanitizeForLog } = require('./mock-api-harness');
 
 let mainWindow;
 let currentUserId = null;
@@ -74,7 +75,8 @@ function getDataDir() {
 }
 
 function writeLog(level, event, details = {}) {
-  const entry = JSON.stringify({ time: new Date().toISOString(), level, event, userId: currentUserId || null, ...details });
+  const safeDetails = sanitizeForLog(details);
+  const entry = JSON.stringify({ time: new Date().toISOString(), level, event, userId: currentUserId || null, ...safeDetails });
   fs.appendFileSync(path.join(getDataDir(), 'logs', 'app.jsonl'), `${entry}\n`, 'utf8');
 }
 
@@ -970,6 +972,36 @@ function registerIpc() {
   });
 
   ipcMain.handle('settings:get', () => publicSettings(userSettings(requireLogin().id)));
+  ipcMain.handle('settings:test-live-api', async (_, payload) => {
+    const user = requireLogin();
+    const settings = userSettings(user.id);
+    const provider = payload?.provider || settings.provider || 'openai';
+    const hasKey = Boolean(settings.apiKeys?.[provider]);
+    if (!hasKey) {
+      return {
+        ok: false,
+        status: 'pending',
+        message: `รอผู้ใช้เพิ่ม API Key จริงสำหรับ ${provider} ก่อน`,
+        provider,
+        mockMode: true
+      };
+    }
+    const harness = createMockApiHarness({ provider, scenario: payload?.scenario || 'success' });
+    const result = await harness.call({
+      provider,
+      model: payload?.model || settings[`${provider}Model`] || (provider === 'openai' ? 'gpt-4.1-mini' : 'gemini-2.0-flash'),
+      messages: [{ role: 'user', content: payload?.message || 'ทดสอบการเชื่อมต่อ' }]
+    });
+    return {
+      ok: true,
+      status: 'success',
+      message: 'Mock API verification completed',
+      provider,
+      model: payload?.model || settings[`${provider}Model`] || (provider === 'openai' ? 'gpt-4.1-mini' : 'gemini-2.0-flash'),
+      usage: result.usage,
+      mockMode: true
+    };
+  });
   ipcMain.handle('logs:get', () => {
     const user = requireLogin();
     const logPath = path.join(getDataDir(), 'logs', 'app.jsonl');

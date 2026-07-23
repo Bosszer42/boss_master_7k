@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('bossAPI', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   getLogs: () => ipcRenderer.invoke('logs:get'),
   saveSettings: (payload) => ipcRenderer.invoke('settings:save', payload),
+  testLiveApi: (payload) => ipcRenderer.invoke('settings:test-live-api', payload),
   listModels: (provider) => ipcRenderer.invoke('providers:list-models', provider),
   getNote: () => ipcRenderer.invoke('notes:get'),
   saveNote: (content) => ipcRenderer.invoke('notes:save', { content }),
