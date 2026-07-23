@@ -1,57 +1,76 @@
-# BOSSMASTER AI CHAT & BATCH 0.1.0 Alpha
+# BOSSMASTER AI CHAT & BATCH 0.2.0
 
-ซอร์สรุ่นเริ่มต้นสำหรับทดสอบบน Windows เป็นโปรแกรมแยกจาก WorkPad, UNI และ WP MY BOSS
+โปรแกรม Windows แยกอิสระสำหรับแชท AI เขียนโค้ด จดโน้ต และประมวลผลงานจำนวนมากผ่าน OpenAI/Gemini API
 
-## ฟังก์ชันที่ทำงานในรุ่นนี้
+## ความสามารถ
 
-- สร้างบัญชี Owner และล็อกอินด้วย Username/Password
-- Hash รหัสผ่านด้วย `scrypt` และ salt แยกรายบัญชี
-- เก็บ OpenAI/Gemini API Key ด้วย Electron `safeStorage` ของระบบปฏิบัติการ
-- UI สมัยใหม่ Dark Mode ตามพิมพ์เขียว
-- แยก 3 โหมด: แชทธรรมดา / เขียนโค้ด / งานจำนวนมาก
-- ห้องสนทนาหลายห้องและประวัติแยกตามผู้ใช้
-- เชื่อม OpenAI Responses API และ Gemini generateContent
-- โหลดรายชื่อโมเดลจาก API Key จริง ไม่ฝังชื่อโมเดลตายตัว
-- แนบ TXT/CSV/JSON/XML/ไฟล์โค้ด/XLSX/XLSM และรูปภาพ
-- Batch จาก CSV/XLSX/XLSM/JSON ครั้งละ 1–3 รายการ
-- Pause/Resume/Cancel, Retry, Delay, Checkpoint ทุกชุด
-- บังคับ Batch คืน JSON array และแยก `item_id`
-- ส่งออกผลเป็น XLSX หรือ JSON
+- Owner/User/Viewer พร้อมข้อมูลแยกตามบัญชี
+- รหัสผ่านแบบ `scrypt` และ API Key เข้ารหัสด้วย Windows `safeStorage`
+- แชทแบบ Streaming พร้อมปุ่มหยุดทันที ประวัติหลายห้อง และ Dynamic Model List
+- แนบรูป TXT/MD/CSV/JSON/XLSX/PDF/DOCX และอ่าน ZIP แบบปลอดภัยโดยไม่รันไฟล์
+- Notepad ส่วนตัวบันทึกอัตโนมัติและไม่ส่งเข้า AI
+- Code Workspace เปิดโฟลเดอร์ ค้นหา อ่าน แนบ และเขียนไฟล์หลังยืนยัน พร้อม Backup เดิม
+- Batch 1–6 รายการต่อชุด, Pause/Resume/Cancel, Retry/Backoff, Retry FAIL และ Checkpoint
+- Recovery งานค้างหลังเปิดโปรแกรมใหม่ และหยุดอัตโนมัติเมื่อผิดพลาดติดต่อกัน
+- Structured JSON, Required Fields, ชนิดข้อมูล, ความยาว, จำนวนคำ/ย่อหน้า และคำต้องห้าม
+- ล็อกค่าที่ต้องตรงต้นฉบับ และซ่อมเฉพาะช่องที่ตรวจไม่ผ่าน
+- Export XLSX, CSV UTF-8 BOM, JSON และ JSONL โดยรักษาลำดับต้นฉบับ
+- Budget Token รายวัน, Requests ต่อนาที, Provider Fallback, Usage และ Log ที่ไม่เก็บ API Key
+- Backup/Restore ฐานข้อมูล พร้อม Safety Backup ก่อน Restore
+- ป้องกัน navigation, popup, Node ใน renderer, ZIP traversal และ path/symlink ออกจาก Code Workspace
 
-## ข้อจำกัดของรุ่น Alpha
+## ติดตั้งสำหรับผู้ใช้
 
-- คำตอบแชทยังแสดงเมื่อ API ตอบครบ ไม่ใช่ Streaming ทีละ token
-- PDF, DOCX และ ZIP เลือกแนบได้ แต่ยังไม่แตก/อ่านข้อความภายใน
-- Code Workspace ในรุ่นนี้เป็นห้องแชทแยกสำหรับโค้ด ยังไม่มี Diff/เขียนไฟล์จริง
-- Batch Validator รุ่นแรกตรวจ JSON และ item_id; Validator เฉพาะกฎ SEO จะเพิ่มในรุ่นถัดไป
-- ยังไม่มีระบบ Server Login หลายเครื่อง บัญชีและข้อมูลอยู่ในเครื่องที่ติดตั้ง
-- ยังไม่ได้ Build `Setup.exe` ในสภาพแวดล้อมนี้ ต้อง Build บน Windows
+1. เปิด `BOSSMASTER_AI_CHAT_BATCH_Setup_0.2.0_x64.exe`
+2. เลือกตำแหน่งติดตั้งและเปิดโปรแกรม
+3. ครั้งแรกสร้างบัญชี Owner
+4. เปิด Settings แล้วกรอก API Key ของผู้ให้บริการ
+5. โหลดรายชื่อโมเดลและเริ่มใช้งาน
 
-## วิธีทดสอบบน Windows
+Portable เปิดได้โดยไม่ติดตั้งจาก `BOSSMASTER_AI_CHAT_BATCH_Portable_0.2.0_x64.exe`
 
-1. แตก ZIP นี้ในโฟลเดอร์ที่เขียนไฟล์ได้ เช่น `C:\BOSSMASTER_AI_CHAT_BATCH`
-2. เปิด `INSTALL_AND_RUN.bat`
-3. รอ `npm install` ให้เสร็จ โปรแกรมจะเปิดอัตโนมัติ
-4. ครั้งแรกสร้างบัญชี Owner
-5. เข้า Settings แล้วใส่ OpenAI API Key หรือ Gemini API Key
-6. กดปุ่ม ↻ เพื่อโหลดรายชื่อโมเดล
-7. เลือกโมเดลแล้วเริ่มแชท
+## พัฒนาและทดสอบ
 
-ต้องมี Node.js LTS และ Internet ในขั้นติดตั้ง dependency เท่านั้น
+ต้องมี Node.js LTS:
 
-## สร้าง Setup.exe และ Portable
+```text
+npm install --no-audit --no-fund
+npm test
+npm start
+npm run pack:win
+npm run dist:win
+```
 
-เปิด `BUILD_WINDOWS.bat` โปรแกรมจะติดตั้ง dependency, ตรวจ syntax และ Build ไฟล์ไว้ในโฟลเดอร์ `release`
+หรือใช้ `INSTALL_AND_RUN.bat` และ `BUILD_WINDOWS.bat`
 
-## ตำแหน่งข้อมูลจริง
+## สำรองและกู้คืน
 
-ข้อมูลผู้ใช้ ห้องแชท คิวงาน และไฟล์ส่งออกอยู่ใน Electron userData ไม่ได้อยู่ในโฟลเดอร์ซอร์ส จึงไม่หายเมื่อ Build รุ่นใหม่ทับซอร์ส
+เปิด Settings:
 
-## จุดที่แก้เองได้ง่าย
+- `สำรองข้อมูล` เลือกตำแหน่งไฟล์ JSON
+- `กู้คืนข้อมูล` เลือกไฟล์สำรอง โปรแกรมจะสร้าง Safety Backup ของข้อมูลปัจจุบันก่อนเสมอ
+- การเปลี่ยนรหัสผ่านไม่ลบ Chat, Batch หรือ Notepad
 
-- หน้าตา/ตำแหน่ง: `src/index.html`, `src/styles.css`
-- การทำงาน UI: `src/app.js`
-- API/ฐานข้อมูล/Batch: `main.js`
-- ค่าเริ่มต้น: `config/defaults.json`
+ข้อมูลจริงอยู่ใน Electron userData ไม่ได้อยู่ในโฟลเดอร์ซอร์ส ห้ามนำ `database.json`, API Key, `node_modules` หรือ `release` ขึ้น Git
 
-ก่อนแก้ `main.js` ให้สำรองไฟล์ และรัน `TEST_SOURCE.bat` ทุกครั้ง
+## โครงสร้างสำคัญ
+
+- `main.js` — API, Auth, Storage, Batch, Validator, Backup และ Code Workspace
+- `preload.js` — IPC Bridge แบบจำกัดสิทธิ์
+- `src/index.html` — โครง UI
+- `src/app.js` — การทำงานฝั่งหน้าจอ
+- `src/styles.css` — รูปแบบ UI
+- `config/defaults.json` — ค่าเริ่มต้น
+- `scripts/generate-icon.ps1` — สร้างไอคอน Windows ซ้ำได้
+
+## การทดสอบที่ต้องใช้ API Key จริง
+
+ก่อน Release ให้ทดสอบ OpenAI และ Gemini อย่างละหนึ่งรอบ:
+
+1. Streaming และ Stop
+2. ไฟล์ PDF/DOCX/ZIP
+3. Batch Sample พร้อม Pause/Resume/Retry FAIL
+4. Validator และ Auto Repair
+5. Export ทั้งสี่รูปแบบ
+
+ไม่ควรรับรองว่าเนื้อหาจากโมเดลถูกต้อง 100% ผล Batch ที่เข้มงวดต้องผ่าน Validator และรายการเสี่ยงควรตรวจโดยผู้ใช้
