@@ -22,5 +22,9 @@ contextBridge.exposeInMainWorld('bossAPI', {
   pauseBatch: (jobId) => ipcRenderer.invoke('batch:pause', jobId),
   cancelBatch: (jobId) => ipcRenderer.invoke('batch:cancel', jobId),
   exportBatch: (jobId) => ipcRenderer.invoke('batch:export', jobId),
-  onBatchUpdated: (callback) => ipcRenderer.on('batch:updated', (_, job) => callback(job))
+  onBatchUpdated: (callback) => {
+    const listener = (_, job) => callback(job);
+    ipcRenderer.on('batch:updated', listener);
+    return () => ipcRenderer.removeListener('batch:updated', listener);
+  }
 });

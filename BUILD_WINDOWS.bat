@@ -6,7 +6,7 @@ echo Build BOSSMASTER AI CHAT ^& BATCH for Windows
 echo ==============================================
 where node >nul 2>nul
 if errorlevel 1 (
-  echo [ERROR] ไม่พบ Node.js LTS
+  echo [ERROR] ไม่พบ Node.js LTS กรุณาติดตั้งก่อน
   pause
   exit /b 1
 )
@@ -18,7 +18,7 @@ call npm run dist:win
 if errorlevel 1 goto :error
 echo.
 echo [OK] Build สำเร็จ ดูไฟล์ในโฟลเดอร์ release
-explorer "%~dp0release"
+start "" explorer "%~dp0release"
 pause
 exit /b 0
 :error

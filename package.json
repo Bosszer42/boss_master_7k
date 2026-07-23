@@ -10,8 +10,8 @@
     "start": "electron .",
     "dev": "electron . --dev",
     "test": "node --check main.js && node --check preload.js && node --check src/app.js",
-    "dist:win": "electron-builder --win nsis portable",
-    "pack:win": "electron-builder --win dir"
+    "dist:win": "electron-builder --win nsis portable --publish never",
+    "pack:win": "electron-builder --win dir --publish never"
   },
   "dependencies": {
     "xlsx": "^0.18.5"

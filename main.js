@@ -10,6 +10,7 @@ let mainWindow;
 let currentUserId = null;
 let store;
 const batchControllers = new Map();
+const RETRYABLE_STATUS = new Set([408, 409, 429, 500, 502, 503, 504]);
 
 class JsonStore {
   constructor(filePath) {
@@ -57,7 +58,13 @@ function getDataDir() {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(path.join(dataDir, 'exports'), { recursive: true });
   fs.mkdirSync(path.join(dataDir, 'backups'), { recursive: true });
+  fs.mkdirSync(path.join(dataDir, 'logs'), { recursive: true });
   return dataDir;
+}
+
+function writeLog(level, event, details = {}) {
+  const entry = JSON.stringify({ time: new Date().toISOString(), level, event, ...details });
+  fs.appendFileSync(path.join(getDataDir(), 'logs', 'app.jsonl'), `${entry}\n`, 'utf8');
 }
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
@@ -134,6 +141,13 @@ function createWindow() {
     }
   });
   mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'));
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url !== mainWindow.webContents.getURL()) event.preventDefault();
+  });
+  mainWindow.webContents.on('render-process-gone', (_, details) => {
+    writeLog('error', 'renderer_gone', details);
+  });
   if (process.argv.includes('--dev')) mainWindow.webContents.openDevTools({ mode: 'detach' });
 }
 
@@ -172,24 +186,39 @@ function mapGeminiContents(messages, attachments = []) {
   return contents;
 }
 
-async function apiFetch(url, options, timeoutMs = 180000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    const raw = await response.text();
-    let json;
-    try { json = raw ? JSON.parse(raw) : {}; } catch (_) { json = { raw }; }
-    if (!response.ok) {
-      const message = json?.error?.message || json?.message || raw || `HTTP ${response.status}`;
-      const error = new Error(message);
-      error.status = response.status;
-      throw error;
+async function apiFetch(url, options, timeoutMs = 180000, maxAttempts = 4) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      const raw = await response.text();
+      let json;
+      try { json = raw ? JSON.parse(raw) : {}; } catch (_) { json = { raw }; }
+      if (!response.ok) {
+        const message = json?.error?.message || json?.message || raw || `HTTP ${response.status}`;
+        const error = new Error(message);
+        error.status = response.status;
+        const retryAfter = Number(response.headers.get('retry-after'));
+        error.retryAfterMs = Number.isFinite(retryAfter) ? retryAfter * 1000 : 0;
+        throw error;
+      }
+      return json;
+    } catch (error) {
+      lastError = error;
+      const retryable = error.name === 'AbortError' || RETRYABLE_STATUS.has(error.status);
+      writeLog(retryable ? 'warn' : 'error', 'api_request_failed', {
+        host: new URL(url).host, status: error.status || null, attempt, message: error.message
+      });
+      if (!retryable || attempt === maxAttempts) throw error;
+      const delay = error.retryAfterMs || Math.min(30000, 1000 * (2 ** (attempt - 1)));
+      await new Promise((resolve) => setTimeout(resolve, delay + Math.floor(Math.random() * 250)));
+    } finally {
+      clearTimeout(timer);
     }
-    return json;
-  } finally {
-    clearTimeout(timer);
   }
+  throw lastError;
 }
 
 async function listModels(provider) {
@@ -285,6 +314,26 @@ async function callProvider({ provider, model, messages, systemPrompt, attachmen
   throw new Error('Provider ไม่รองรับ');
 }
 
+async function callProviderWithFallback(request) {
+  try {
+    return await callProvider(request);
+  } catch (primaryError) {
+    if (!RETRYABLE_STATUS.has(primaryError.status)) throw primaryError;
+    const settings = userSettings(requireLogin().id);
+    const fallbackProvider = request.provider === 'openai' ? 'gemini' : 'openai';
+    if (!settings.apiKeys?.[fallbackProvider]) throw primaryError;
+    const models = await listModels(fallbackProvider);
+    const fallbackModel = settings[`${fallbackProvider}Model`] || models[0];
+    if (!fallbackModel) throw primaryError;
+    writeLog('warn', 'provider_fallback', {
+      fromProvider: request.provider, fromModel: request.model,
+      toProvider: fallbackProvider, toModel: fallbackModel
+    });
+    const result = await callProvider({ ...request, provider: fallbackProvider, model: fallbackModel });
+    return { ...result, fallbackProvider, fallbackModel };
+  }
+}
+
 function readAttachment(filePath) {
   const stat = fs.statSync(filePath);
   if (stat.size > 25 * 1024 * 1024) throw new Error(`ไฟล์ ${path.basename(filePath)} ใหญ่เกิน 25 MB ในรุ่น Alpha`);
@@ -345,7 +394,7 @@ async function runBatch(jobId) {
     }
     const pending = job.items.filter((item) => ['pending', 'retry'].includes(item.status));
     if (!pending.length) break;
-    const group = pending.slice(0, Math.max(1, Math.min(3, Number(job.batchSize || 1))));
+    const group = pending.slice(0, Math.max(1, Math.min(6, Number(job.batchSize || 3))));
     group.forEach((item) => { item.status = 'running'; item.updatedAt = new Date().toISOString(); });
     store.save();
     emitJob(job);
@@ -354,7 +403,7 @@ async function runBatch(jobId) {
     const strictInstruction = `${job.instruction}\n\nข้อบังคับระบบ:\n- ใช้เฉพาะข้อมูล source ของแต่ละรายการ\n- ห้ามอธิบายขั้นตอน ห้ามใส่ Markdown ห้ามใส่ข้อความก่อนหรือหลัง JSON\n- ห้ามนำข้อมูลข้ามรายการมาปนกัน\n- คืน JSON array เท่านั้น จำนวน ${group.length} รายการ\n- แต่ละ object ต้องมี item_id เดิมและ result\nรูปแบบ: [{"item_id":"...","result":{}}]`;
 
     try {
-      const response = await callProvider({
+      const response = await callProviderWithFallback({
         provider: job.provider,
         model: job.model,
         messages: [{ role: 'user', content: `${strictInstruction}\n\nSOURCE_ROWS:\n${JSON.stringify(sourceRows)}` }],
@@ -378,12 +427,15 @@ async function runBatch(jobId) {
         item.output = entry.result;
         item.rawOutput = response.text;
         item.status = 'success';
+        item.provider = response.fallbackProvider || job.provider;
+        item.model = response.fallbackModel || job.model;
         item.error = '';
         item.updatedAt = new Date().toISOString();
       }
       consecutiveErrors = group.some((i) => i.status !== 'success') ? consecutiveErrors + 1 : 0;
     } catch (error) {
       consecutiveErrors += 1;
+      writeLog('error', 'batch_group_failed', { jobId, message: error.message, status: error.status || null });
       for (const item of group) {
         item.retryCount += 1;
         item.error = error.message;
@@ -531,7 +583,7 @@ function registerIpc() {
     room.updatedAt = new Date().toISOString();
     store.save();
     const history = store.data.messages.filter((m) => m.roomId === room.id).slice(-30).map((m) => ({ role: m.role, content: m.content }));
-    const response = await callProvider({
+    const response = await callProviderWithFallback({
       provider: payload.provider,
       model: payload.model,
       messages: history,
@@ -542,7 +594,7 @@ function registerIpc() {
     });
     const assistantMessage = {
       id: crypto.randomUUID(), roomId: room.id, role: 'assistant', content: response.text,
-      provider: payload.provider, model: payload.model, usage: response.usage,
+      provider: response.fallbackProvider || payload.provider, model: response.fallbackModel || payload.model, usage: response.usage,
       finishReason: response.finishReason, createdAt: new Date().toISOString()
     };
     store.data.messages.push(assistantMessage);
@@ -590,7 +642,7 @@ function registerIpc() {
       id: crypto.randomUUID(), userId: user.id, name: payload.name || path.basename(filePath),
       sourceFile: filePath, instruction: payload.instruction || 'ประมวลผลข้อมูลตามที่กำหนด',
       systemPrompt: payload.systemPrompt || '', provider: payload.provider, model: payload.model,
-      batchSize: Math.max(1, Math.min(3, Number(payload.batchSize || 1))),
+      batchSize: Math.max(1, Math.min(6, Number(payload.batchSize || 3))),
       retry: Math.max(0, Number(payload.retry || 3)), delayMs: Math.max(0, Number(payload.delayMs || 2500)),
       stopAfterErrors: Math.max(1, Number(payload.stopAfterErrors || 5)),
       temperature: Number(payload.temperature ?? 0.2), maxOutputTokens: Number(payload.maxOutputTokens || 8192),
@@ -607,21 +659,33 @@ function registerIpc() {
     return store.data.jobs.filter((j) => j.userId === user.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(sanitizeJob);
   });
   ipcMain.handle('batch:start', (_, jobId) => {
-    requireLogin();
+    const user = requireLogin();
+    const job = store.data.jobs.find((item) => item.id === jobId && item.userId === user.id);
+    if (!job) throw new Error('ไม่พบงาน Batch');
     if (!batchControllers.has(jobId)) runBatch(jobId).catch((error) => {
-      const job = store.data.jobs.find((j) => j.id === jobId);
       if (job) { job.status = 'failed'; job.lastError = error.message; store.save(); emitJob(job); }
     });
-    else batchControllers.get(jobId).paused = false;
+    else {
+      batchControllers.get(jobId).paused = false;
+      job.status = 'running';
+      store.save();
+      emitJob(job);
+    }
     return { ok: true };
   });
   ipcMain.handle('batch:pause', (_, jobId) => {
-    requireLogin(); const controller = batchControllers.get(jobId); if (controller) controller.paused = true;
-    const job = store.data.jobs.find((j) => j.id === jobId); if (job) { job.status = 'paused'; store.save(); emitJob(job); }
+    const user = requireLogin(); const controller = batchControllers.get(jobId); if (controller) controller.paused = true;
+    const job = store.data.jobs.find((j) => j.id === jobId && j.userId === user.id);
+    if (!job) throw new Error('ไม่พบงาน Batch');
+    job.status = 'paused'; store.save(); emitJob(job);
     return { ok: true };
   });
   ipcMain.handle('batch:cancel', (_, jobId) => {
-    requireLogin(); const controller = batchControllers.get(jobId); if (controller) controller.cancelled = true;
+    const user = requireLogin();
+    const job = store.data.jobs.find((j) => j.id === jobId && j.userId === user.id);
+    if (!job) throw new Error('ไม่พบงาน Batch');
+    const controller = batchControllers.get(jobId); if (controller) controller.cancelled = true;
+    job.status = 'cancelled'; store.save(); emitJob(job);
     return { ok: true };
   });
   ipcMain.handle('batch:export', async (_, jobId) => {
@@ -634,14 +698,25 @@ function registerIpc() {
       __status: item.status,
       __retry: item.retryCount,
       __error: item.error,
+      __provider: item.provider || job.provider,
+      __model: item.model || job.model,
       ...(item.output && typeof item.output === 'object' ? item.output : { __output: item.output || '' })
     }));
     const result = await dialog.showSaveDialog(mainWindow, {
       defaultPath: path.join(getDataDir(), 'exports', `${job.name.replace(/[^a-zA-Z0-9ก-๙_-]+/g, '_')}_RESULT.xlsx`),
-      filters: [{ name: 'Excel', extensions: ['xlsx'] }, { name: 'JSON', extensions: ['json'] }]
+      filters: [
+        { name: 'Excel', extensions: ['xlsx'] },
+        { name: 'CSV UTF-8', extensions: ['csv'] },
+        { name: 'JSON', extensions: ['json'] }
+      ]
     });
     if (result.canceled) return null;
-    if (path.extname(result.filePath).toLowerCase() === '.json') fs.writeFileSync(result.filePath, JSON.stringify(rows, null, 2), 'utf8');
+    const outputExt = path.extname(result.filePath).toLowerCase();
+    if (outputExt === '.json') fs.writeFileSync(result.filePath, JSON.stringify(rows, null, 2), 'utf8');
+    else if (outputExt === '.csv') {
+      const csv = XLSX.utils.sheet_to_csv(XLSX.utils.json_to_sheet(rows));
+      fs.writeFileSync(result.filePath, `\uFEFF${csv}`, 'utf8');
+    }
     else {
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'RESULT');
