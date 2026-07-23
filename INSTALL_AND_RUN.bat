@@ -1,25 +1,33 @@
 @echo off
-chcp 65001 >nul
+setlocal
 cd /d "%~dp0"
 echo ==============================================
 echo BOSSMASTER AI CHAT ^& BATCH - Install and Run
 echo ==============================================
-where node >nul 2>nul
+where node.exe >nul 2>nul
 if errorlevel 1 (
-  echo [ERROR] ไม่พบ Node.js กรุณาติดตั้ง Node.js LTS ก่อน
+  echo [ERROR] Node.js LTS was not found.
+  echo Install Node.js LTS and run this file again.
   pause
   exit /b 1
 )
-call npm install
+where npm.cmd >nul 2>nul
 if errorlevel 1 (
-  echo [ERROR] npm install ไม่สำเร็จ
+  echo [ERROR] npm was not found.
+  echo Reinstall Node.js LTS with npm enabled.
   pause
   exit /b 1
 )
-call npm test
+call npm.cmd install
 if errorlevel 1 (
-  echo [ERROR] Source syntax test ไม่ผ่าน
+  echo [ERROR] npm install failed.
   pause
   exit /b 1
 )
-call npm start
+call npm.cmd test
+if errorlevel 1 (
+  echo [ERROR] Source syntax test failed.
+  pause
+  exit /b 1
+)
+call npm.cmd start

@@ -1,28 +1,37 @@
 @echo off
-chcp 65001 >nul
+setlocal
 cd /d "%~dp0"
 echo ==============================================
 echo Build BOSSMASTER AI CHAT ^& BATCH for Windows
 echo ==============================================
-where node >nul 2>nul
+where node.exe >nul 2>nul
 if errorlevel 1 (
-  echo [ERROR] ไม่พบ Node.js LTS กรุณาติดตั้งก่อน
+  echo [ERROR] Node.js LTS was not found.
+  echo Install Node.js LTS and run this file again.
   pause
   exit /b 1
 )
-call npm install
-if errorlevel 1 goto :error
-call npm test
-if errorlevel 1 goto :error
-call npm run dist:win
-if errorlevel 1 goto :error
+where npm.cmd >nul 2>nul
+if errorlevel 1 (
+  echo [ERROR] npm was not found.
+  echo Reinstall Node.js LTS with npm enabled.
+  pause
+  exit /b 1
+)
+call npm.cmd install
+if errorlevel 1 goto error
+call npm.cmd test
+if errorlevel 1 goto error
+call npm.cmd run dist:win
+if errorlevel 1 goto error
 echo.
-echo [OK] Build สำเร็จ ดูไฟล์ในโฟลเดอร์ release
-start "" explorer "%~dp0release"
+echo [OK] Build completed. Output is in the release folder.
+start "" explorer.exe "%~dp0release"
 pause
 exit /b 0
+
 :error
 echo.
-echo [ERROR] Build ไม่สำเร็จ กรุณาส่งข้อความ Error กลับมา
+echo [ERROR] Build failed. Copy the error above and send it for review.
 pause
 exit /b 1
