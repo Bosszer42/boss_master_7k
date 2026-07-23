@@ -38,15 +38,18 @@
       "target": [
         { "target": "nsis", "arch": ["x64"] },
         { "target": "portable", "arch": ["x64"] }
-      ],
-      "artifactName": "BOSSMASTER_AI_CHAT_BATCH_${version}_${arch}.${ext}"
+      ]
     },
     "nsis": {
+      "artifactName": "BOSSMASTER_AI_CHAT_BATCH_Setup_${version}_${arch}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "BOSSMASTER AI CHAT & BATCH"
+    },
+    "portable": {
+      "artifactName": "BOSSMASTER_AI_CHAT_BATCH_Portable_${version}_${arch}.${ext}"
     }
   }
 }
