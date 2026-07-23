@@ -214,10 +214,20 @@ async function apiFetch(url, options = {}, timeoutMs = 180000, maxAttempts = 4, 
       return json;
     } catch (error) {
       lastError = error;
-      const retryable = error.name === 'AbortError' || RETRYABLE_STATUS.has(error.status);
+      const userCancelled = Boolean(signal?.aborted);
+      const timedOut = error.name === 'AbortError' && !userCancelled;
+      const retryable = timedOut || RETRYABLE_STATUS.has(error.status);
       writeLog(retryable ? 'warn' : 'error', 'api_request_failed', {
-        host: new URL(url).host, status: error.status || null, attempt, message: error.message
+        host: new URL(url).host,
+        status: error.status || null,
+        attempt,
+        cancelled: userCancelled,
+        message: error.message
       });
+      // A user pressing Stop must end the request immediately. Retrying with the
+      // same already-aborted signal only adds backoff delays and makes Stop appear
+      // unresponsive.
+      if (userCancelled) throw error;
       if (!retryable || attempt === maxAttempts) throw error;
       const delay = error.retryAfterMs || Math.min(30000, 1000 * (2 ** (attempt - 1)));
       await new Promise((resolve) => setTimeout(resolve, delay + Math.floor(Math.random() * 250)));
