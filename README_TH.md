@@ -1,4 +1,4 @@
-# BOSSMASTER AI CHAT & BATCH 0.2.1
+# BOSSMASTER AI CHAT & BATCH 0.2.2
 
 โปรแกรม Windows แยกอิสระสำหรับแชท AI เขียนโค้ด จดโน้ต และประมวลผลงานจำนวนมากผ่าน OpenAI/Gemini API
 
@@ -6,7 +6,7 @@
 
 - Owner/User/Viewer พร้อมข้อมูลแยกตามบัญชี
 - รหัสผ่านแบบ `scrypt` และ API Key เข้ารหัสด้วย Windows `safeStorage`
-- แชทแบบ Streaming พร้อมปุ่มหยุดทันที ประวัติหลายห้อง และ Dynamic Model List
+- แชทแบบ Streaming พร้อมปุ่มหยุดทันที ประวัติหลายห้อง Dynamic Model List และตัวชี้สถานะ AI กำลังคิด/กำลังตอบ
 - แนบรูป TXT/MD/CSV/JSON/XLSX/PDF/DOCX และอ่าน ZIP แบบปลอดภัยโดยไม่รันไฟล์
 - Notepad ส่วนตัวบันทึกอัตโนมัติและไม่ส่งเข้า AI
 - Code Workspace เปิดโฟลเดอร์ ค้นหา อ่าน แนบ และเขียนไฟล์หลังยืนยัน พร้อม Backup เดิม
@@ -21,13 +21,20 @@
 
 ## ติดตั้งสำหรับผู้ใช้
 
-1. เปิด `BOSSMASTER_AI_CHAT_BATCH_Setup_0.2.1_x64.exe`
+1. เปิด `BOSSMASTER_AI_CHAT_BATCH_Setup_0.2.2_x64.exe`
 2. เลือกตำแหน่งติดตั้งและเปิดโปรแกรม
 3. ครั้งแรกสร้างบัญชี Owner
 4. เปิด Settings แล้วกรอก API Key ของผู้ให้บริการ
 5. โหลดรายชื่อโมเดลและเริ่มใช้งาน
 
-Portable เปิดได้โดยไม่ติดตั้งจาก `BOSSMASTER_AI_CHAT_BATCH_Portable_0.2.1_x64.exe`
+Portable เปิดได้โดยไม่ติดตั้งจาก `BOSSMASTER_AI_CHAT_BATCH_Portable_0.2.2_x64.exe`
+
+## Loading ใหม่และ Animation
+
+- แสดง loading แบบกล่องลอยพร้อมลูกหมุน จุดสามจุด และข้อความสถานะสำหรับกระบวนการต่าง ๆ
+- Streaming แสดงสถานะ `AI กำลังตอบ...` และ cursor กะพริบท้ายคำตอบอย่างนุ่มนวล
+- เพิ่ม transition สำหรับการสลับแท็บ Chat/Code/Batch/Notepad, dialog, toast และ progress bar
+- รองรับ `prefers-reduced-motion` เพื่อหลีกเลี่ยงภาพเคลื่อนไหวที่รบกวน
 
 ## พัฒนาและทดสอบ
 

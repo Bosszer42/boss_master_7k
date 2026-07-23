@@ -5,9 +5,24 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 const state = {
   user: null, needsOwner: false, mode: 'normal', settings: null,
   rooms: [], activeRoom: null, attachments: [], jobs: [], activeJob: null, busy: false,
-  noteLoaded: false, noteSaveTimer: null, streamingText: '',
+  noteLoaded: false, noteSaveTimer: null, streamingText: '', streamingStarted: false,
   codeRoot: '', codeFiles: [], codeFile: null, codeOriginal: ''
 };
+
+function showActivity(title = 'กำลังทำงาน...', detail = 'กรุณารอสักครู่') {
+  $('#activityTitle').textContent = title;
+  $('#activityDetail').textContent = detail;
+  $('#activityLayer').classList.remove('hidden');
+}
+
+function updateActivity(title, detail) {
+  if (title) $('#activityTitle').textContent = title;
+  if (detail) $('#activityDetail').textContent = detail;
+}
+
+function hideActivity() {
+  $('#activityLayer').classList.add('hidden');
+}
 
 function toast(message, type = '') {
   const el = document.createElement('div');
@@ -44,6 +59,7 @@ async function bootstrap() {
 async function authAction() {
   const username = $('#username').value.trim();
   const password = $('#password').value;
+  showActivity(state.needsOwner ? 'กำลังสร้างบัญชี Owner...' : 'กำลังเข้าสู่ระบบ...', 'กำลังตรวจสอบข้อมูลอย่างปลอดภัย');
   try {
     if (state.needsOwner) {
       await window.bossAPI.createOwner({ username, password, displayName: $('#displayName').value.trim() });
@@ -62,21 +78,27 @@ async function authAction() {
     $('#avatar').textContent = state.user.displayName.slice(0, 1).toUpperCase();
     await loadAppData();
   } catch (error) { toast(error.message, 'error'); }
+  finally { hideActivity(); }
 }
 
 async function loadAppData() {
-  state.settings = await window.bossAPI.getSettings();
-  $('#providerSelect').value = state.settings.provider || 'openai';
-  $('#temperature').value = state.settings.temperature ?? 0.4;
-  $('#temperatureValue').textContent = $('#temperature').value;
-  $('#maxOutputTokens').value = state.settings.maxOutputTokens || 4096;
-  $('#dailyTokenBudget').value = state.settings.dailyTokenBudget || 0;
-  $('#requestsPerMinute').value = state.settings.requestsPerMinute || 30;
-  renderKeyStatus();
-  await Promise.all([loadRooms(), loadJobs()]);
-  if (state.rooms.length) await openRoom(state.rooms[0].id);
-  else await createRoom();
-  await refreshModels(false);
+  showActivity('กำลังโหลดข้อมูล...', 'เตรียมห้อง แชท งานและการตั้งค่าของคุณ');
+  try {
+    state.settings = await window.bossAPI.getSettings();
+    $('#providerSelect').value = state.settings.provider || 'openai';
+    $('#temperature').value = state.settings.temperature ?? 0.4;
+    $('#temperatureValue').textContent = $('#temperature').value;
+    $('#maxOutputTokens').value = state.settings.maxOutputTokens || 4096;
+    $('#dailyTokenBudget').value = state.settings.dailyTokenBudget || 0;
+    $('#requestsPerMinute').value = state.settings.requestsPerMinute || 30;
+    renderKeyStatus();
+    await Promise.all([loadRooms(), loadJobs()]);
+    if (state.rooms.length) await openRoom(state.rooms[0].id);
+    else await createRoom();
+    await refreshModels(false);
+  } finally {
+    hideActivity();
+  }
 }
 
 function renderKeyStatus() {
@@ -142,10 +164,15 @@ function renderStreamingMessage() {
     article = document.createElement('article');
     article.id = 'streamingAssistantMessage';
     article.className = 'message assistant';
-    article.innerHTML = '<div class="avatar">AI</div><div class="bubble"><div class="stream-content"></div><div class="message-meta">กำลังตอบ…</div></div>';
+    article.innerHTML = '<div class="avatar ai-working">AI</div><div class="bubble streaming-bubble"><div class="stream-content"></div><div class="thinking-row"><span class="mini-spinner"></span><span class="thinking-label">AI กำลังคิด</span><span class="typing-dots"><i></i><i></i><i></i></span></div><div class="message-meta">กำลังเตรียมคำตอบ…</div></div>';
     $('#messageList').appendChild(article);
   }
-  article.querySelector('.stream-content').innerHTML = renderRichText(state.streamingText);
+  const content = article.querySelector('.stream-content');
+  const thinking = article.querySelector('.thinking-row');
+  content.innerHTML = renderRichText(state.streamingText);
+  content.classList.toggle('streaming-cursor', state.streamingStarted);
+  thinking.classList.toggle('hidden', state.streamingStarted);
+  article.querySelector('.message-meta').textContent = state.streamingStarted ? 'AI กำลังตอบแบบเรียลไทม์…' : 'กำลังเตรียมคำตอบ…';
   $('#messageList').scrollTop = $('#messageList').scrollHeight;
 }
 
@@ -228,6 +255,7 @@ async function sendMessage() {
   if (!state.activeRoom) await createRoom();
   state.busy = true;
   state.streamingText = '';
+  state.streamingStarted = false;
   $('#sendButton').classList.add('hidden');
   $('#stopButton').classList.remove('hidden');
   $('#stopButton').disabled = false;
@@ -235,6 +263,8 @@ async function sendMessage() {
   const optimistic = await window.bossAPI.listMessages(state.activeRoom.id);
   optimistic.push({ role: 'user', content, createdAt: new Date().toISOString() });
   renderMessages(optimistic);
+  renderStreamingMessage();
+  showActivity('AI กำลังคิด...', `${provider} · ${model}`);
   try {
     const result = await window.bossAPI.sendChat({
       roomId: state.activeRoom.id, content, attachments: state.attachments,
@@ -256,7 +286,9 @@ async function sendMessage() {
     await openRoom(state.activeRoom.id);
   } finally {
     state.streamingText = '';
+    state.streamingStarted = false;
     state.busy = false;
+    hideActivity();
     $('#sendButton').classList.remove('hidden');
     $('#stopButton').classList.add('hidden');
     $('#stopButton').disabled = true;
@@ -265,16 +297,22 @@ async function sendMessage() {
 
 window.bossAPI.onChatDelta(({ roomId, delta }) => {
   if (!state.busy || state.activeRoom?.id !== roomId) return;
+  if (!state.streamingStarted) {
+    state.streamingStarted = true;
+    updateActivity('AI กำลังตอบ...', 'กำลังรับข้อความแบบเรียลไทม์');
+  }
   state.streamingText += String(delta || '');
   renderStreamingMessage();
 });
 
 async function selectAttachments() {
+  showActivity('กำลังอ่านไฟล์...', 'ตรวจชนิดและเตรียมไฟล์แนบอย่างปลอดภัย');
   try {
     const files = await window.bossAPI.selectFiles();
     state.attachments.push(...files);
     renderAttachments();
   } catch (error) { toast(error.message, 'error'); }
+  finally { hideActivity(); }
 }
 
 function renderAttachments() {
@@ -284,6 +322,7 @@ function renderAttachments() {
 
 async function refreshModels(showToast = true) {
   const provider = $('#providerSelect').value;
+  showActivity('กำลังโหลดโมเดล...', `ตรวจรายการโมเดลที่บัญชี ${provider} ใช้งานได้`);
   $('#modelSelect').innerHTML = '<option value="">กำลังโหลด...</option>';
   try {
     const models = await window.bossAPI.listModels(provider);
@@ -297,9 +336,11 @@ async function refreshModels(showToast = true) {
     if (showToast) toast(error.message, 'error');
   }
   renderKeyStatus();
+  hideActivity();
 }
 
 async function saveSettings() {
+  showActivity('กำลังบันทึกการตั้งค่า...', 'เข้ารหัส API Key ด้วยระบบความปลอดภัยของ Windows');
   try {
     state.settings = await window.bossAPI.saveSettings({
       provider: $('#providerSelect').value,
@@ -313,6 +354,7 @@ async function saveSettings() {
     toast('บันทึกและเข้ารหัส API Key แล้ว', 'success');
     await refreshModels(false);
   } catch (error) { toast(error.message, 'error'); }
+  finally { hideActivity(); }
 }
 
 async function loadUsers() {
@@ -350,6 +392,7 @@ function renderJobSelect() {
 async function importBatch() {
   const provider = $('#providerSelect').value, model = $('#modelSelect').value;
   if (!model) return toast('กรุณาเลือก Provider และ Model ก่อน', 'error');
+  showActivity('กำลังนำเข้า Batch...', 'อ่านไฟล์ตารางและสร้างงานใหม่ให้พร้อมใช้งาน');
   try {
     const job = await window.bossAPI.importBatch({
       name: $('#batchName').value.trim(), instruction: $('#batchInstruction').value.trim(),
@@ -370,6 +413,7 @@ async function importBatch() {
     $('#batchDialog').close(); setMode('batch');
     toast(`สร้างงาน ${job.items.length} รายการแล้ว`, 'success');
   } catch (error) { toast(error.message, 'error'); }
+  finally { hideActivity(); }
 }
 
 function renderActiveJob() {
@@ -452,11 +496,14 @@ $('#changePasswordButton').addEventListener('click', async () => {
   } catch (error) { toast(error.message, 'error'); }
 });
 $('#backupButton').addEventListener('click', async () => {
+  showActivity('กำลังสำรองข้อมูล...', 'สร้างไฟล์ backup ของข้อมูลปัจจุบัน');
   try { if (await window.bossAPI.backupData()) toast('สำรองข้อมูลแล้ว', 'success'); }
   catch (error) { toast(error.message, 'error'); }
+  finally { hideActivity(); }
 });
 $('#restoreButton').addEventListener('click', async () => {
   if (!confirm('กู้คืนฐานข้อมูลจากไฟล์สำรอง? ระบบจะสำรองข้อมูลปัจจุบันให้อัตโนมัติก่อน')) return;
+  showActivity('กำลังกู้คืนข้อมูล...', 'โหลดไฟล์สำรองและคืนค่าตามบัญชีที่เข้าสู่ระบบ');
   try {
     const result = await window.bossAPI.restoreData();
     if (result) {
@@ -464,6 +511,7 @@ $('#restoreButton').addEventListener('click', async () => {
       setTimeout(() => location.reload(), 800);
     }
   } catch (error) { toast(error.message, 'error'); }
+  finally { hideActivity(); }
 });
 $('#createUserButton').addEventListener('click', async () => {
   try {
@@ -481,6 +529,7 @@ $('#createUserButton').addEventListener('click', async () => {
   } catch (error) { toast(error.message, 'error'); }
 });
 $('#openCodeFolder').addEventListener('click', async () => {
+  showActivity('กำลังเปิดพื้นที่โค้ด...', 'สแกนไฟล์ในโฟลเดอร์และเตรียม Workspace');
   try {
     const workspace = await window.bossAPI.openCodeFolder();
     if (!workspace) return;
@@ -491,6 +540,7 @@ $('#openCodeFolder').addEventListener('click', async () => {
     $('#codeRoot').textContent = workspace.root;
     $('#codeFileList').innerHTML = workspace.files.map((file) => `<option value="${escapeHtml(file)}">${escapeHtml(file)}</option>`).join('');
   } catch (error) { toast(error.message, 'error'); }
+  finally { hideActivity(); }
 });
 $('#toggleCodePanel').addEventListener('click', () => {
   const collapsed = $('#codeWorkspacePanel').classList.toggle('collapsed');
@@ -506,6 +556,7 @@ $('#codeFileList').addEventListener('change', async () => {
   } catch (error) { toast(error.message, 'error'); }
 });
 $('#searchCodeButton').addEventListener('click', async () => {
+  showActivity('กำลังค้นหาในโค้ด...', 'ค้นหาคำที่เลือกภายใน Workspace');
   try {
     const matches = await window.bossAPI.searchCode($('#codeSearch').value);
     $('#codeSearchResults').innerHTML = matches.slice(0, 200).map((match) =>
@@ -515,6 +566,7 @@ $('#searchCodeButton').addEventListener('click', async () => {
       $('#codeFileList').dispatchEvent(new Event('change'));
     }));
   } catch (error) { toast(error.message, 'error'); }
+  finally { hideActivity(); }
 });
 $('#attachCodeToChat').addEventListener('click', () => {
   if (!state.codeFile) return toast('เลือกไฟล์ก่อน', 'error');
@@ -531,12 +583,14 @@ $('#saveCodeFile').addEventListener('click', async () => {
   const afterLines = content.split(/\r?\n/);
   const changed = Math.max(beforeLines.length, afterLines.length);
   if (!confirm(`ยืนยันเขียนไฟล์ ${state.codeFile}?\nก่อน: ${beforeLines.length} บรรทัด\nหลัง: ${afterLines.length} บรรทัด\nระบบจะสำรองไฟล์เดิมก่อนเสมอ`)) return;
+  showActivity('กำลังบันทึกไฟล์...', 'สร้าง backup และเขียนไฟล์จริงหลังยืนยัน');
   try {
     const result = await window.bossAPI.writeCodeFile({ path: state.codeFile, content });
     state.codeOriginal = content;
     toast(`บันทึกแล้ว (สำรองเดิมไว้แล้ว ${changed} บรรทัดที่ตรวจเปรียบเทียบ)`, 'success');
     $('#codeFilePath').textContent = `${state.codeFile} · backup: ${result.backupPath}`;
   } catch (error) { toast(error.message, 'error'); }
+  finally { hideActivity(); }
 });
 $('#temperature').addEventListener('input', () => $('#temperatureValue').textContent = $('#temperature').value);
 $('#assistantPreset').addEventListener('change', applyAssistantPreset);
@@ -551,15 +605,19 @@ $('#deleteRoom').addEventListener('click', async () => {
 });
 $('#importBatchFile').addEventListener('click', (e) => { e.preventDefault(); importBatch(); });
 $('#jobSelect').addEventListener('change', () => { state.activeJob = state.jobs.find((j) => j.id === $('#jobSelect').value) || null; renderActiveJob(); });
-$('#batchStart').addEventListener('click', async () => { if (!state.activeJob) return toast('เลือกงานก่อน','error'); await window.bossAPI.startBatch(state.activeJob.id); });
-$('#batchPause').addEventListener('click', async () => { if (state.activeJob) await window.bossAPI.pauseBatch(state.activeJob.id); });
+$('#batchStart').addEventListener('click', async () => { if (!state.activeJob) return toast('เลือกงานก่อน','error'); showActivity('กำลังเริ่ม Batch...', 'ประมวลผลงานและบันทึก checkpoint อย่างต่อเนื่อง'); try { await window.bossAPI.startBatch(state.activeJob.id); } catch (error) { toast(error.message,'error'); } finally { hideActivity(); } });
+$('#batchPause').addEventListener('click', async () => { if (!state.activeJob) return; showActivity('กำลังพัก Batch...', 'หยุดการประมวลผลชั่วคราวและคงสถานะเดิม'); try { await window.bossAPI.pauseBatch(state.activeJob.id); } catch (error) { toast(error.message,'error'); } finally { hideActivity(); } });
 $('#batchRetryFailed').addEventListener('click', async () => {
   if (!state.activeJob) return toast('เลือกงานก่อน','error');
-  const result = await window.bossAPI.retryFailedBatch(state.activeJob.id);
-  toast(result.count ? `นำ ${result.count} รายการกลับเข้าคิวแล้ว` : 'ไม่มีรายการ FAIL', result.count ? 'success' : '');
+  showActivity('กำลังลองใหม่เฉพาะ FAIL...', 'นำรายการที่ล้มเหลวกลับเข้าคิวใหม่');
+  try {
+    const result = await window.bossAPI.retryFailedBatch(state.activeJob.id);
+    toast(result.count ? `นำ ${result.count} รายการกลับเข้าคิวแล้ว` : 'ไม่มีรายการ FAIL', result.count ? 'success' : '');
+  } catch (error) { toast(error.message,'error'); }
+  finally { hideActivity(); }
 });
-$('#batchCancel').addEventListener('click', async () => { if (state.activeJob && confirm('หยุดงานนี้หรือไม่')) await window.bossAPI.cancelBatch(state.activeJob.id); });
-$('#batchExport').addEventListener('click', async () => { if (!state.activeJob) return toast('เลือกงานก่อน','error'); try { const file = await window.bossAPI.exportBatch(state.activeJob.id); if (file) toast('ส่งออกแล้ว','success'); } catch(error){ toast(error.message,'error'); } });
+$('#batchCancel').addEventListener('click', async () => { if (!state.activeJob || !confirm('หยุดงานนี้หรือไม่')) return; showActivity('กำลังหยุด Batch...', 'ยกเลิกงานและคงสถานะล่าสุดไว้'); try { await window.bossAPI.cancelBatch(state.activeJob.id); } catch (error) { toast(error.message,'error'); } finally { hideActivity(); } });
+$('#batchExport').addEventListener('click', async () => { if (!state.activeJob) return toast('เลือกงานก่อน','error'); showActivity('กำลังส่งออกผลลัพธ์...', 'เตรียมไฟล์ CSV/XLSX/JSON ที่เลือก'); try { const file = await window.bossAPI.exportBatch(state.activeJob.id); if (file) toast('ส่งออกแล้ว','success'); } catch(error){ toast(error.message,'error'); } finally { hideActivity(); } });
 $('#notepadEditor').addEventListener('input', scheduleNoteSave);
 $('#copyNote').addEventListener('click', async () => {
   await window.bossAPI.copyText($('#notepadEditor').value);
