@@ -241,6 +241,18 @@ async function apiFetch(url, options = {}, timeoutMs = 180000, maxAttempts = 4, 
   throw lastError;
 }
 
+function requireOwner() {
+  const user = requireLogin();
+  if (user.role !== 'owner') throw new Error('เฉพาะ Owner เท่านั้นที่ทำรายการนี้ได้');
+  return user;
+}
+
+function requireWriter() {
+  const user = requireLogin();
+  if (user.role === 'viewer') throw new Error('บัญชี Viewer เปิดดูได้อย่างเดียว');
+  return user;
+}
+
 async function streamSse(url, options, signal, onEvent) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 180000);
@@ -790,6 +802,81 @@ function registerIpc() {
     currentUserId = null;
     return { ok: true };
   });
+  ipcMain.handle('auth:change-password', (_, payload) => {
+    const user = requireLogin();
+    if (!verifyPassword(String(payload.currentPassword || ''), user.salt, user.passwordHash)) throw new Error('รหัสผ่านปัจจุบันไม่ถูกต้อง');
+    if (String(payload.newPassword || '').length < 8) throw new Error('รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร');
+    const { salt, hash } = hashPassword(payload.newPassword);
+    user.salt = salt;
+    user.passwordHash = hash;
+    user.passwordChangedAt = new Date().toISOString();
+    store.audit('password_changed');
+    return { ok: true };
+  });
+  ipcMain.handle('users:list', () => {
+    requireOwner();
+    return store.data.users.map(({ passwordHash, salt, ...user }) => user);
+  });
+  ipcMain.handle('users:create', (_, payload) => {
+    requireOwner();
+    const username = String(payload.username || '').trim().toLowerCase();
+    if (username.length < 3) throw new Error('Username ต้องมีอย่างน้อย 3 ตัวอักษร');
+    if (store.data.users.some((user) => user.username === username)) throw new Error('Username นี้มีอยู่แล้ว');
+    if (String(payload.password || '').length < 8) throw new Error('Password ต้องมีอย่างน้อย 8 ตัวอักษร');
+    const role = ['user', 'viewer'].includes(payload.role) ? payload.role : 'user';
+    const { salt, hash } = hashPassword(payload.password);
+    const user = {
+      id: crypto.randomUUID(), username,
+      displayName: String(payload.displayName || username).trim(),
+      role, salt, passwordHash: hash, active: true,
+      createdAt: new Date().toISOString()
+    };
+    store.data.users.push(user);
+    store.audit('user_created', { targetUserId: user.id, role });
+    const { passwordHash, salt: ignored, ...safeUser } = user;
+    return safeUser;
+  });
+  ipcMain.handle('users:update', (_, payload) => {
+    const owner = requireOwner();
+    const user = store.data.users.find((item) => item.id === payload.id);
+    if (!user) throw new Error('ไม่พบบัญชี');
+    if (user.id === owner.id && payload.active === false) throw new Error('ไม่สามารถระงับบัญชี Owner ที่กำลังใช้งาน');
+    if (user.role !== 'owner' && ['user', 'viewer'].includes(payload.role)) user.role = payload.role;
+    if (typeof payload.active === 'boolean') user.active = payload.active;
+    if (payload.displayName) user.displayName = String(payload.displayName).trim();
+    store.audit('user_updated', { targetUserId: user.id, role: user.role, active: user.active });
+    return { ok: true };
+  });
+  ipcMain.handle('data:backup', async () => {
+    requireOwner();
+    store.save();
+    const result = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: path.join(getDataDir(), 'backups', `BOSSMASTER_backup_${new Date().toISOString().replace(/[:.]/g, '-')}.json`),
+      filters: [{ name: 'BOSSMASTER Backup', extensions: ['json'] }]
+    });
+    if (result.canceled) return null;
+    fs.copyFileSync(store.filePath, result.filePath);
+    return result.filePath;
+  });
+  ipcMain.handle('data:restore', async () => {
+    const owner = requireOwner();
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: [{ name: 'BOSSMASTER Backup', extensions: ['json'] }]
+    });
+    if (result.canceled) return null;
+    const parsed = JSON.parse(fs.readFileSync(result.filePaths[0], 'utf8'));
+    for (const key of ['users', 'settings', 'rooms', 'messages', 'jobs']) {
+      if (!parsed || typeof parsed !== 'object' || !(key in parsed)) throw new Error(`ไฟล์สำรองไม่สมบูรณ์: ไม่มี ${key}`);
+    }
+    if (!parsed.users.some((user) => user.id === owner.id)) throw new Error('ไฟล์สำรองไม่มีบัญชี Owner ที่กำลังใช้งาน');
+    const safetyCopy = path.join(getDataDir(), 'backups', `before_restore_${Date.now()}.json`);
+    fs.copyFileSync(store.filePath, safetyCopy);
+    fs.writeFileSync(store.filePath, JSON.stringify(parsed, null, 2), 'utf8');
+    store = new JsonStore(store.filePath);
+    store.audit('database_restored', { safetyCopy });
+    return { ok: true, safetyCopy };
+  });
 
   ipcMain.handle('settings:get', () => publicSettings(userSettings(requireLogin().id)));
   ipcMain.handle('settings:save', (_, payload) => {
@@ -814,7 +901,7 @@ function registerIpc() {
     return store.data.notes[user.id] || { content: '', updatedAt: null };
   });
   ipcMain.handle('notes:save', (_, payload) => {
-    const user = requireLogin();
+    const user = requireWriter();
     const content = String(payload?.content || '');
     if (content.length > 2_000_000) throw new Error('Notepad รองรับสูงสุด 2,000,000 ตัวอักษร');
     store.data.notes ||= {};
@@ -860,7 +947,7 @@ function registerIpc() {
     return store.data.messages.filter((m) => m.roomId === roomId).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   });
   ipcMain.handle('chat:send', async (event, payload) => {
-    const user = requireLogin();
+    const user = requireWriter();
     const room = store.data.rooms.find((r) => r.id === payload.roomId && r.userId === user.id);
     if (!room) throw new Error('ไม่พบห้อง');
 
@@ -946,7 +1033,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('batch:import', async (_, payload) => {
-    const user = requireLogin();
+    const user = requireWriter();
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openFile'],
       filters: [{ name: 'ตารางงาน', extensions: ['csv','xlsx','xlsm','json'] }]
@@ -1001,7 +1088,7 @@ function registerIpc() {
     return store.data.jobs.filter((j) => j.userId === user.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(sanitizeJob);
   });
   ipcMain.handle('batch:start', (_, jobId) => {
-    const user = requireLogin();
+    const user = requireWriter();
     const job = store.data.jobs.find((item) => item.id === jobId && item.userId === user.id);
     if (!job) throw new Error('ไม่พบงาน Batch');
     if (!batchControllers.has(jobId)) runBatch(jobId).catch((error) => {

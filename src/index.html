@@ -138,6 +138,28 @@
       <label>OpenAI API Key<input id="openaiKey" type="password" placeholder="เว้นว่างเพื่อเก็บค่าเดิม" /></label>
       <label>Gemini API Key<input id="geminiKey" type="password" placeholder="เว้นว่างเพื่อเก็บค่าเดิม" /></label>
       <div id="keyStatus" class="hint"></div>
+      <hr />
+      <h3>ความปลอดภัยและข้อมูล</h3>
+      <div class="form-grid">
+        <label>รหัสผ่านปัจจุบัน<input id="currentPassword" type="password" /></label>
+        <label>รหัสผ่านใหม่<input id="newPassword" type="password" placeholder="อย่างน้อย 8 ตัวอักษร" /></label>
+      </div>
+      <div class="dialog-actions">
+        <button id="changePasswordButton" type="button">เปลี่ยนรหัสผ่าน</button>
+        <button id="backupButton" type="button">สำรองข้อมูล</button>
+        <button id="restoreButton" type="button">กู้คืนข้อมูล</button>
+      </div>
+      <section id="userManagement" class="hidden">
+        <h3>ผู้ใช้งาน</h3>
+        <div class="form-grid">
+          <label>Username<input id="newUsername" /></label>
+          <label>ชื่อแสดงผล<input id="newDisplayName" /></label>
+          <label>Password<input id="newUserPassword" type="password" /></label>
+          <label>บทบาท<select id="newUserRole"><option value="user">User</option><option value="viewer">Viewer</option></select></label>
+        </div>
+        <button id="createUserButton" type="button">สร้างผู้ใช้</button>
+        <div id="userList" class="hint"></div>
+      </section>
       <div class="dialog-actions"><button value="cancel">ยกเลิก</button><button id="saveSettings" value="default" class="primary">บันทึก</button></div>
     </form>
   </dialog>

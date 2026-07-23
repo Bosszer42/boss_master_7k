@@ -309,6 +309,20 @@ async function saveSettings() {
   } catch (error) { toast(error.message, 'error'); }
 }
 
+async function loadUsers() {
+  if (state.user?.role !== 'owner') return;
+  const users = await window.bossAPI.listUsers();
+  $('#userManagement').classList.remove('hidden');
+  $('#userList').innerHTML = users.map((user) =>
+    `<div class="attachment-chip"><strong>${escapeHtml(user.displayName)}</strong> @${escapeHtml(user.username)} · ${escapeHtml(user.role)} · ${user.active === false ? 'ระงับ' : 'ใช้งาน'}
+      ${user.role !== 'owner' ? `<button type="button" data-toggle-user="${user.id}" data-active="${user.active !== false}">${user.active === false ? 'เปิด' : 'ระงับ'}</button>` : ''}
+    </div>`).join('');
+  $$('[data-toggle-user]').forEach((button) => button.addEventListener('click', async () => {
+    await window.bossAPI.updateUser({ id: button.dataset.toggleUser, active: button.dataset.active !== 'true' });
+    await loadUsers();
+  }));
+}
+
 async function persistRoomSettings() {
   if (!state.activeRoom) return;
   state.activeRoom = await window.bossAPI.updateRoom({ id: state.activeRoom.id, patch: { systemPrompt: $('#systemPrompt').value, mode: state.mode } });
@@ -410,8 +424,52 @@ $('#modelSelect').addEventListener('change', async () => {
   const payload = { provider, [provider === 'openai' ? 'openaiModel' : 'geminiModel']: $('#modelSelect').value };
   state.settings = await window.bossAPI.saveSettings(payload);
 });
-$('#settingsButton').addEventListener('click', () => { renderKeyStatus(); $('#settingsDialog').showModal(); });
+$('#settingsButton').addEventListener('click', async () => {
+  renderKeyStatus();
+  $('#settingsDialog').showModal();
+  try { await loadUsers(); } catch (error) { toast(error.message, 'error'); }
+});
 $('#saveSettings').addEventListener('click', (e) => { e.preventDefault(); saveSettings(); });
+$('#changePasswordButton').addEventListener('click', async () => {
+  try {
+    await window.bossAPI.changePassword({
+      currentPassword: $('#currentPassword').value,
+      newPassword: $('#newPassword').value
+    });
+    $('#currentPassword').value = '';
+    $('#newPassword').value = '';
+    toast('เปลี่ยนรหัสผ่านแล้ว', 'success');
+  } catch (error) { toast(error.message, 'error'); }
+});
+$('#backupButton').addEventListener('click', async () => {
+  try { if (await window.bossAPI.backupData()) toast('สำรองข้อมูลแล้ว', 'success'); }
+  catch (error) { toast(error.message, 'error'); }
+});
+$('#restoreButton').addEventListener('click', async () => {
+  if (!confirm('กู้คืนฐานข้อมูลจากไฟล์สำรอง? ระบบจะสำรองข้อมูลปัจจุบันให้อัตโนมัติก่อน')) return;
+  try {
+    const result = await window.bossAPI.restoreData();
+    if (result) {
+      toast('กู้คืนข้อมูลแล้ว กำลังโหลดใหม่', 'success');
+      setTimeout(() => location.reload(), 800);
+    }
+  } catch (error) { toast(error.message, 'error'); }
+});
+$('#createUserButton').addEventListener('click', async () => {
+  try {
+    await window.bossAPI.createUser({
+      username: $('#newUsername').value,
+      displayName: $('#newDisplayName').value,
+      password: $('#newUserPassword').value,
+      role: $('#newUserRole').value
+    });
+    $('#newUsername').value = '';
+    $('#newDisplayName').value = '';
+    $('#newUserPassword').value = '';
+    await loadUsers();
+    toast('สร้างผู้ใช้แล้ว', 'success');
+  } catch (error) { toast(error.message, 'error'); }
+});
 $('#temperature').addEventListener('input', () => $('#temperatureValue').textContent = $('#temperature').value);
 $('#assistantPreset').addEventListener('change', applyAssistantPreset);
 $('#systemPrompt').addEventListener('change', persistRoomSettings);
