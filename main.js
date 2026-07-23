@@ -8,10 +8,18 @@ const XLSX = require('xlsx');
 const pdfParse = require('pdf-parse');
 const mammoth = require('mammoth');
 const AdmZip = require('adm-zip');
-const { createMockApiHarness, sanitizeForLog } = require('./mock-api-harness');
+let createMockApiHarness = null;
+let sanitizeForLog = (value) => value;
+try {
+  ({ createMockApiHarness, sanitizeForLog } = require('./mock-api-harness'));
+} catch (_) {
+  createMockApiHarness = null;
+  sanitizeForLog = (value) => value;
+}
 
 let mainWindow;
 let currentUserId = null;
+let currentUserSessionExpiresAt = null;
 let store;
 const batchControllers = new Map();
 const RETRYABLE_STATUS = new Set([408, 409, 429, 500, 502, 503, 504]);
@@ -22,6 +30,8 @@ const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const MAX_ATTACHMENT_TOTAL_BYTES = 40 * 1024 * 1024;
 const requestHistory = new Map();
 const codeWorkspaces = new Map();
+const { ensureBootstrapOwner } = require('./bootstrap-owner');
+const { migrateLegacyOwner, isSuperAdmin, canManageUsers, canViewAudit, canCreateUser, sanitizeUserForClient } = require('./security-rules');
 
 class JsonStore {
   constructor(filePath) {
@@ -91,10 +101,22 @@ function verifyPassword(password, salt, expectedHash) {
   return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
 }
 
+function clearSession() {
+  currentUserId = null;
+  currentUserSessionExpiresAt = null;
+}
+
 function requireLogin() {
   if (!currentUserId) throw new Error('กรุณาเข้าสู่ระบบก่อน');
+  if (currentUserSessionExpiresAt && Date.now() > currentUserSessionExpiresAt) {
+    clearSession();
+    throw new Error('เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่');
+  }
   const user = store.data.users.find((item) => item.id === currentUserId && item.active !== false);
-  if (!user) throw new Error('ไม่พบบัญชีผู้ใช้หรือบัญชีถูกระงับ');
+  if (!user) {
+    clearSession();
+    throw new Error('ไม่พบบัญชีผู้ใช้หรือบัญชีถูกระงับ');
+  }
   return user;
 }
 
@@ -142,7 +164,58 @@ function publicSettings(settings) {
   };
 }
 
+function getRegistrationPolicySnapshot() {
+  if (!store?.data) {
+    return { mode: 'closed', registrationLocked: true, registrationMessage: 'การสมัครสมาชิกถูกปิดไว้สำหรับผู้ใช้ทั่วไป กรุณาติดต่อ Super Admin เพื่อสร้างบัญชี' };
+  }
+  const mode = String(store.data.registrationMode || 'closed').toLowerCase();
+  const normalizedMode = ['closed', 'invite_only', 'open'].includes(mode) ? mode : 'closed';
+  const registrationLocked = normalizedMode !== 'open';
+  return {
+    mode: normalizedMode,
+    registrationLocked,
+    registrationMessage: store.data.registrationMessage || 'การสมัครสมาชิกถูกปิดไว้สำหรับผู้ใช้ทั่วไป กรุณาติดต่อ Super Admin เพื่อสร้างบัญชี'
+  };
+}
+
+function setRegistrationPolicy(mode, actor = null) {
+  if (actor && !isSuperAdmin(actor)) throw new Error('เฉพาะ Super Admin เท่านั้นที่เปลี่ยนโหมดการสมัครได้');
+  const normalizedMode = ['closed', 'invite_only', 'open'].includes(String(mode || '').toLowerCase())
+    ? String(mode).toLowerCase()
+    : 'closed';
+  store.data.registrationMode = normalizedMode;
+  store.data.registrationLocked = normalizedMode !== 'open';
+  store.data.registrationMessage = normalizedMode === 'open'
+    ? 'การสมัครสมาชิกเปิดอยู่สำหรับผู้ใช้ทั่วไป'
+    : normalizedMode === 'invite_only'
+      ? 'การสมัครสมาชิกต้องใช้ Invite Token เท่านั้น'
+      : 'การสมัครสมาชิกถูกปิดไว้สำหรับผู้ใช้ทั่วไป';
+  store.data.settings ||= {};
+  if (!store.data.settings.global) store.data.settings.global = {};
+  store.data.settings.global.allowSelfSignup = normalizedMode === 'open';
+  store.save();
+  return getRegistrationPolicySnapshot();
+}
+
+function ensureAppSecurityState() {
+  if (!store) return;
+  const policy = getRegistrationPolicySnapshot();
+  store.data.registrationMode = policy.mode;
+  store.data.registrationLocked = policy.registrationLocked;
+  store.data.registrationMessage = policy.registrationMessage;
+  store.data.settings ||= {};
+  if (!store.data.settings.global) store.data.settings.global = {};
+  if (typeof store.data.settings.global.allowSelfSignup === 'undefined') store.data.settings.global.allowSelfSignup = false;
+  store.save();
+}
+
 function createWindow() {
+  if (!store) {
+    store = new JsonStore(path.join(getDataDir(), 'database.json'));
+  }
+  store.data.users = (store.data.users || []).map((user) => migrateLegacyOwner(user));
+  ensureBootstrapOwner(store, { username: 'bosszer42', password: '', displayName: 'Bosszer42' });
+  ensureAppSecurityState();
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -314,7 +387,13 @@ function listWorkspaceFiles(root) {
 
 function requireOwner() {
   const user = requireLogin();
-  if (user.role !== 'owner') throw new Error('เฉพาะ Owner เท่านั้นที่ทำรายการนี้ได้');
+  if (user.role !== 'owner' && user.role !== 'super_admin') throw new Error('เฉพาะ Owner/Super Admin เท่านั้นที่ทำรายการนี้ได้');
+  return user;
+}
+
+function requireSuperAdmin() {
+  const user = requireLogin();
+  if (!isSuperAdmin(user)) throw new Error('เฉพาะ Super Admin เท่านั้นที่ทำรายการนี้ได้');
   return user;
 }
 
@@ -845,7 +924,8 @@ function sanitizeJob(job) {
 function registerIpc() {
   ipcMain.handle('app:bootstrap', () => ({
     needsOwner: store.data.users.length === 0,
-    appVersion: app.getVersion()
+    appVersion: app.getVersion(),
+    registrationPolicy: getRegistrationPolicySnapshot()
   }));
 
   ipcMain.handle('app:open-external-link', async (_, url) => {
@@ -859,8 +939,32 @@ function registerIpc() {
     }
   });
 
+  ipcMain.handle('auth:register', (_, payload) => {
+    const policy = getRegistrationPolicySnapshot();
+    if (policy.mode !== 'open') throw new Error('การสมัครสมาชิกไม่เปิดอยู่ในขณะนี้');
+    if (payload?.selfSignup !== true) throw new Error('การสมัครสมาชิกต้องใช้วิธีเปิดให้ผู้ใช้ทั่วไป');
+    const username = String(payload.username || '').trim().toLowerCase();
+    if (username.length < 3) throw new Error('Username ต้องมีอย่างน้อย 3 ตัวอักษร');
+    if (store.data.users.some((user) => user.username === username)) throw new Error('Username นี้มีอยู่แล้ว');
+    if (String(payload.password || '').length < 8) throw new Error('Password ต้องมีอย่างน้อย 8 ตัวอักษร');
+    const { salt, hash } = hashPassword(payload.password);
+    const user = {
+      id: crypto.randomUUID(),
+      username,
+      displayName: String(payload.displayName || username).trim(),
+      role: 'user',
+      salt,
+      passwordHash: hash,
+      active: true,
+      createdAt: new Date().toISOString()
+    };
+    store.data.users.push(user);
+    store.audit('self_registered', { targetUserId: user.id });
+    return sanitizeUserForClient(user);
+  });
+
   ipcMain.handle('auth:create-owner', (_, payload) => {
-    if (store.data.users.length) throw new Error('มีบัญชี Owner แล้ว');
+    if (store.data.users.length) throw new Error('ระบบมีบัญชีผู้ดูแลแล้ว ไม่อนุญาตให้สร้าง Super Admin คนที่สอง');
     if (!payload.username || payload.username.length < 3) throw new Error('Username ต้องมีอย่างน้อย 3 ตัวอักษร');
     if (!payload.password || payload.password.length < 8) throw new Error('Password ต้องมีอย่างน้อย 8 ตัวอักษร');
     const { salt, hash } = hashPassword(payload.password);
@@ -868,7 +972,7 @@ function registerIpc() {
       id: crypto.randomUUID(),
       username: payload.username.trim().toLowerCase(),
       displayName: payload.displayName?.trim() || payload.username.trim(),
-      role: 'owner',
+      role: 'super_admin',
       salt,
       passwordHash: hash,
       active: true,
@@ -880,19 +984,39 @@ function registerIpc() {
   });
 
   ipcMain.handle('auth:login', (_, { username, password }) => {
-    const user = store.data.users.find((u) => u.username === String(username).trim().toLowerCase());
-    if (!user || !user.active || !verifyPassword(password, user.salt, user.passwordHash)) {
-      throw new Error('Username หรือ Password ไม่ถูกต้อง');
+    const normalizedUsername = String(username || '').trim().toLowerCase();
+    store.data.security ||= { failures: {}, lockouts: {} };
+    const now = Date.now();
+    const lockoutUntil = Number(store.data.security.lockouts?.[normalizedUsername] || 0);
+    if (lockoutUntil && now < lockoutUntil) {
+      throw new Error('บัญชีถูกล็อกชั่วคราวเนื่องจากกรอกข้อมูลไม่ถูกต้องหลายครั้ง กรุณาลองใหม่ในภายหลัง');
     }
+
+    const user = store.data.users.find((u) => u.username === normalizedUsername);
+    const passwordValid = Boolean(user && user.active !== false && verifyPassword(String(password || ''), user.salt, user.passwordHash));
+    if (!user || !passwordValid) {
+      const failures = Number(store.data.security.failures?.[normalizedUsername] || 0) + 1;
+      store.data.security.failures[normalizedUsername] = failures;
+      if (failures >= 5) {
+        store.data.security.lockouts[normalizedUsername] = now + 15 * 60 * 1000;
+      }
+      store.save();
+      store.audit('login_failed', { username: normalizedUsername, failures });
+      throw new Error('ข้อมูลเข้าใช้งานไม่ถูกต้อง');
+    }
+
+    delete store.data.security.failures[normalizedUsername];
+    delete store.data.security.lockouts[normalizedUsername];
     currentUserId = user.id;
+    currentUserSessionExpiresAt = now + 2 * 60 * 60 * 1000;
     user.lastLoginAt = new Date().toISOString();
-    store.audit('login');
+    store.audit('login_success', { username: normalizedUsername, role: user.role });
     return { id: user.id, username: user.username, displayName: user.displayName, role: user.role };
   });
 
   ipcMain.handle('auth:logout', () => {
     if (currentUserId) store.audit('logout');
-    currentUserId = null;
+    clearSession();
     return { ok: true };
   });
   ipcMain.handle('auth:change-password', (_, payload) => {
@@ -906,12 +1030,19 @@ function registerIpc() {
     store.audit('password_changed');
     return { ok: true };
   });
+  ipcMain.handle('registration:get-policy', () => getRegistrationPolicySnapshot());
+  ipcMain.handle('registration:set-policy', (_, payload) => {
+    return setRegistrationPolicy(payload?.mode, requireSuperAdmin());
+  });
   ipcMain.handle('users:list', () => {
-    requireOwner();
-    return store.data.users.map(({ passwordHash, salt, ...user }) => user);
+    requireSuperAdmin();
+    return store.data.users.map((user) => sanitizeUserForClient(user));
   });
   ipcMain.handle('users:create', (_, payload) => {
-    requireOwner();
+    const actor = requireSuperAdmin();
+    const allowSelfSignup = Boolean(store.data.settings?.global?.allowSelfSignup);
+    if (payload?.selfSignup === true && !allowSelfSignup) throw new Error('การสมัครสมาชิกถูกปิดไว้');
+    if (!canCreateUser(actor, payload)) throw new Error('เฉพาะ Super Admin เท่านั้นที่สร้างผู้ใช้ได้');
     const username = String(payload.username || '').trim().toLowerCase();
     if (username.length < 3) throw new Error('Username ต้องมีอย่างน้อย 3 ตัวอักษร');
     if (store.data.users.some((user) => user.username === username)) throw new Error('Username นี้มีอยู่แล้ว');
@@ -926,15 +1057,15 @@ function registerIpc() {
     };
     store.data.users.push(user);
     store.audit('user_created', { targetUserId: user.id, role });
-    const { passwordHash, salt: ignored, ...safeUser } = user;
-    return safeUser;
+    return sanitizeUserForClient(user);
   });
   ipcMain.handle('users:update', (_, payload) => {
-    const owner = requireOwner();
+    const owner = requireSuperAdmin();
     const user = store.data.users.find((item) => item.id === payload.id);
     if (!user) throw new Error('ไม่พบบัญชี');
-    if (user.id === owner.id && payload.active === false) throw new Error('ไม่สามารถระงับบัญชี Owner ที่กำลังใช้งาน');
-    if (user.role !== 'owner' && ['user', 'viewer'].includes(payload.role)) user.role = payload.role;
+    if (user.id === owner.id && payload.active === false) throw new Error('ไม่สามารถระงับบัญชี Super Admin ที่กำลังใช้งาน');
+    if (user.username === 'bosszer42') throw new Error('ไม่อนุญาตให้เปลี่ยน/ระงับ/ลบบัญชี Super Admin หลัก');
+    if (user.role !== 'super_admin' && user.role !== 'owner' && ['user', 'viewer'].includes(payload.role)) user.role = payload.role;
     if (typeof payload.active === 'boolean') user.active = payload.active;
     if (payload.displayName) user.displayName = String(payload.displayName).trim();
     store.audit('user_updated', { targetUserId: user.id, role: user.role, active: user.active });
@@ -971,7 +1102,16 @@ function registerIpc() {
     return { ok: true, safetyCopy };
   });
 
-  ipcMain.handle('settings:get', () => publicSettings(userSettings(requireLogin().id)));
+  ipcMain.handle('settings:get', () => {
+    const user = requireLogin();
+    const settings = publicSettings(userSettings(user.id));
+    return {
+      ...settings,
+      registrationMode: getRegistrationPolicySnapshot().mode,
+      registrationLocked: getRegistrationPolicySnapshot().registrationLocked,
+      registrationMessage: getRegistrationPolicySnapshot().registrationMessage
+    };
+  });
   ipcMain.handle('settings:test-live-api', async (_, payload) => {
     const user = requireLogin();
     const settings = userSettings(user.id);
@@ -1008,13 +1148,17 @@ function registerIpc() {
     if (!fs.existsSync(logPath)) return [];
     return fs.readFileSync(logPath, 'utf8').trim().split(/\r?\n/).slice(-500).map((line) => {
       try { return JSON.parse(line); } catch (_) { return null; }
-    }).filter((entry) => entry && (user.role === 'owner' || entry.userId === user.id)).map((entry) => {
+    }).filter((entry) => entry && (user.role === 'owner' || user.role === 'super_admin' || entry.userId === user.id)).map((entry) => {
       const { apiKey, key, authorization, ...safe } = entry;
       return safe;
     });
   });
   ipcMain.handle('settings:save', (_, payload) => {
     const user = requireLogin();
+    let registrationPolicy = getRegistrationPolicySnapshot();
+    if (typeof payload?.registrationMode !== 'undefined') {
+      registrationPolicy = setRegistrationPolicy(payload.registrationMode, user);
+    }
     const settings = userSettings(user.id);
     for (const key of ['provider', 'openaiModel', 'geminiModel', 'temperature', 'maxOutputTokens', 'dailyTokenBudget', 'requestsPerMinute']) {
       if (typeof payload[key] !== 'undefined') settings[key] = payload[key];
@@ -1025,7 +1169,12 @@ function registerIpc() {
     if (payload.clearOpenAIKey) delete settings.apiKeys.openai;
     if (payload.clearGeminiKey) delete settings.apiKeys.gemini;
     store.audit('settings_saved', { provider: settings.provider });
-    return publicSettings(settings);
+    return {
+      ...publicSettings(settings),
+      registrationMode: registrationPolicy.mode,
+      registrationLocked: registrationPolicy.registrationLocked,
+      registrationMessage: registrationPolicy.registrationMessage
+    };
   });
   ipcMain.handle('providers:list-models', (_, provider) => listModels(provider));
 

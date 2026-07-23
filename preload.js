@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('bossAPI', {
   bootstrap: () => ipcRenderer.invoke('app:bootstrap'),
+  registerAccount: (payload) => ipcRenderer.invoke('auth:register', payload),
   createOwner: (payload) => ipcRenderer.invoke('auth:create-owner', payload),
   login: (payload) => ipcRenderer.invoke('auth:login', payload),
   logout: () => ipcRenderer.invoke('auth:logout'),
@@ -12,6 +13,8 @@ contextBridge.exposeInMainWorld('bossAPI', {
   updateUser: (payload) => ipcRenderer.invoke('users:update', payload),
   backupData: () => ipcRenderer.invoke('data:backup'),
   restoreData: () => ipcRenderer.invoke('data:restore'),
+  getRegistrationPolicy: () => ipcRenderer.invoke('registration:get-policy'),
+  setRegistrationPolicy: (mode) => ipcRenderer.invoke('registration:set-policy', { mode }),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   getLogs: () => ipcRenderer.invoke('logs:get'),
   saveSettings: (payload) => ipcRenderer.invoke('settings:save', payload),

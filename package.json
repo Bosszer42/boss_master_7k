@@ -9,7 +9,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node --check main.js && node --check preload.js && node --check src/app.js && node --test tests/mock-api-harness.test.js",
+    "test": "node --check main.js && node --check preload.js && node --check src/app.js && node --test tests/mock-api-harness.test.js tests/bootstrap-owner.test.js tests/super-admin.test.js",
     "dist:win": "electron-builder --win nsis portable --publish never",
     "pack:win": "electron-builder --win dir --publish never"
   },
@@ -28,6 +28,9 @@
     "productName": "BOSSMASTER AI CHAT & BATCH",
     "asar": true,
     "files": [
+      "bootstrap-owner.js",
+      "security-rules.js",
+      "mock-api-harness.js",
       "main.js",
       "preload.js",
       "src/**/*",

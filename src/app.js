@@ -205,7 +205,7 @@ async function authAction() {
     $('#authScreen').classList.add('hidden');
     $('#appShell').classList.remove('hidden');
     $('#displayUser').textContent = state.user.displayName;
-    $('#roleUser').textContent = state.user.role;
+    $('#roleUser').textContent = roleLabel(state.user.role);
     $('#avatar').textContent = state.user.displayName.slice(0, 1).toUpperCase();
     await loadAppData();
   } catch (error) { toast(error.message, 'error'); }
@@ -235,6 +235,8 @@ async function loadAppData() {
 function renderKeyStatus() {
   if (!state.settings) return;
   const provider = $('#providerSelect').value;
+  if ($('#registrationModeSelect')) $('#registrationModeSelect').value = state.settings.registrationMode || 'closed';
+  if ($('#registrationModeField')) $('#registrationModeField').classList.toggle('hidden', state.user?.role !== 'super_admin');
   const hasKey = provider === 'openai' ? state.settings.hasOpenAIKey : state.settings.hasGeminiKey;
   const modeLabel = hasKey ? 'Live API' : 'รอเพิ่ม Key จริง';
   $('#keyStatus').textContent = `OpenAI: ${state.settings.hasOpenAIKey ? 'บันทึกแล้ว' : 'ยังไม่มี'} | Gemini: ${state.settings.hasGeminiKey ? 'บันทึกแล้ว' : 'ยังไม่มี'} | โหมด: ${modeLabel}`;
@@ -482,13 +484,17 @@ async function refreshModels(showToast = true) {
 async function saveSettings() {
   showActivity('กำลังบันทึกการตั้งค่า...', 'เข้ารหัส API Key ด้วยระบบความปลอดภัยของ Windows');
   try {
-    state.settings = await window.bossAPI.saveSettings({
+    const payload = {
       provider: $('#providerSelect').value,
       openaiKey: $('#openaiKey').value.trim(), geminiKey: $('#geminiKey').value.trim(),
       temperature: Number($('#temperature').value), maxOutputTokens: Number($('#maxOutputTokens').value),
       dailyTokenBudget: Number($('#dailyTokenBudget').value),
       requestsPerMinute: Number($('#requestsPerMinute').value)
-    });
+    };
+    if (state.user?.role === 'super_admin' && $('#registrationModeSelect')) {
+      payload.registrationMode = $('#registrationModeSelect').value;
+    }
+    state.settings = await window.bossAPI.saveSettings(payload);
     $('#openaiKey').value = ''; $('#geminiKey').value = '';
     $('#settingsDialog').close(); renderKeyStatus();
     toast('บันทึกและเข้ารหัส API Key แล้ว', 'success');
@@ -511,8 +517,15 @@ async function runLiveApiTest() {
   }
 }
 
+function roleLabel(role) {
+  if (role === 'super_admin') return 'Super Admin';
+  if (role === 'owner') return 'Owner';
+  if (role === 'viewer') return 'Viewer';
+  return 'User';
+}
+
 async function loadUsers() {
-  if (state.user?.role !== 'owner') return;
+  if (state.user?.role !== 'super_admin') return;
   const users = await window.bossAPI.listUsers();
   $('#userManagement').classList.remove('hidden');
   $('#userList').innerHTML = users.map((user) =>
@@ -698,26 +711,17 @@ $('#settingsButton').addEventListener('click', async () => {
   $('#geminiKey').value = '';
   $('#dailyTokenBudget').value = state.settings.dailyTokenBudget || 0;
   $('#requestsPerMinute').value = state.settings.requestsPerMinute || 30;
+  try {
+    await loadUsers();
+    const logs = await window.bossAPI.getLogs();
+    $('#logViewer').textContent = logs.slice(-100).map((entry) => `${entry.time} ${entry.level} ${entry.event} ${entry.message || ''}`).join('\n');
+  } catch (error) {
+    if (state.user?.role === 'super_admin') toast(error.message, 'error');
+  }
   dialog.showModal();
 });
 $('#testLiveApiButton').addEventListener('click', runLiveApiTest);
 $('#loadRealModelsButton').addEventListener('click', () => refreshModels(true));
-$('#saveSettings').addEventListener('click', async () => {
-  const payload = {
-    provider: $('#providerSelect').value,
-    openaiModel: $('#modelSelect').value,
-    geminiModel: $('#modelSelect').value,
-    temperature: Number($('#temperature').value || 0.4),
-    maxOutputTokens: Number($('#maxOutputTokens').value || 4096),
-    dailyTokenBudget: Number($('#dailyTokenBudget').value || 0),
-    requestsPerMinute: Number($('#requestsPerMinute').value || 30),
-    openaiKey: $('#openaiKey').value || undefined,
-    geminiKey: $('#geminiKey').value || undefined
-  };
-  state.settings = await window.bossAPI.saveSettings(payload);
-  renderKeyStatus();
-  toast('บันทึกค่าตั้งค่าแล้ว', 'success');
-});
 $('#settingsDialog').addEventListener('close', () => {
   renderKeyStatus();
 });
@@ -726,15 +730,6 @@ $('#modelSelect').addEventListener('change', async () => {
   const provider = $('#providerSelect').value;
   const payload = { provider, [provider === 'openai' ? 'openaiModel' : 'geminiModel']: $('#modelSelect').value };
   state.settings = await window.bossAPI.saveSettings(payload);
-});
-$('#settingsButton').addEventListener('click', async () => {
-  renderKeyStatus();
-  $('#settingsDialog').showModal();
-  try {
-    await loadUsers();
-    const logs = await window.bossAPI.getLogs();
-    $('#logViewer').textContent = logs.slice(-100).map((entry) => `${entry.time} ${entry.level} ${entry.event} ${entry.message || ''}`).join('\n');
-  } catch (error) { toast(error.message, 'error'); }
 });
 $('#saveSettings').addEventListener('click', (e) => { e.preventDefault(); saveSettings(); });
 $('#changePasswordButton').addEventListener('click', async () => {

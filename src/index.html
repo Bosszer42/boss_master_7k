@@ -32,6 +32,7 @@
       <label>Password<input id="password" type="password" autocomplete="current-password" placeholder="อย่างน้อย 8 ตัวอักษร" /></label>
       <button id="authButton" class="primary wide">เข้าสู่ระบบ</button>
       <div id="authHint" class="hint"></div>
+      <div class="hint">ไม่มีรหัสผ่านเริ่มต้น ระบบจะรักษาบัญชีเดิมหรือให้สร้าง Super Admin อย่างปลอดภัยในการเปิดครั้งแรก</div>
     </div>
   </section>
 
@@ -160,6 +161,7 @@
       <div class="form-grid">
         <label>งบ Token ต่อวัน (0 = ไม่จำกัด)<input id="dailyTokenBudget" type="number" min="0" value="0" /></label>
         <label>Requests ต่อนาที<input id="requestsPerMinute" type="number" min="1" max="600" value="30" /></label>
+        <label id="registrationModeField" class="hidden">Registration Mode<select id="registrationModeSelect"><option value="closed">Closed</option><option value="invite_only">Invite Only</option><option value="open">Open</option></select></label>
       </div>
       <div id="keyStatus" class="hint"></div>
       <div class="dialog-actions">
@@ -180,6 +182,7 @@
       </div>
       <section id="userManagement" class="hidden">
         <h3>ผู้ใช้งาน</h3>
+        <div class="hint">เฉพาะ Owner/Super Admin เท่านั้นที่สร้างผู้ใช้ใหม่ได้ การสมัครด้วยตนเองถูกปิดอยู่</div>
         <div class="form-grid">
           <label>Username<input id="newUsername" /></label>
           <label>ชื่อแสดงผล<input id="newDisplayName" /></label>
