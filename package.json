@@ -9,7 +9,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node --check main.js && node --check preload.js && node --check src/app.js && node --test tests/mock-api-harness.test.js tests/bootstrap-owner.test.js tests/super-admin.test.js",
+    "test": "node --check main.js && node --check preload.js && node --check src/app.js && node --check scripts/reset-super-admin.js && node --test tests/mock-api-harness.test.js tests/bootstrap-owner.test.js tests/super-admin.test.js tests/reset-super-admin.test.js",
     "server:start": "node server/src/server.js",
     "server:test": "node --test server/tests/*.test.js",
     "dist:win": "electron-builder --win nsis portable --publish never",
