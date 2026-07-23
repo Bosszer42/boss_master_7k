@@ -374,7 +374,8 @@ async function listModels(provider) {
     });
     return (json.data || [])
       .map((m) => m.id)
-      .filter((id) => /^(gpt|o\d|chatgpt)/i.test(id))
+      .filter((id) => /^(gpt|o\d)/i.test(id))
+      .filter((id) => !/(realtime|audio|transcrib|tts|image|search|computer-use|moderation|embedding|whisper|sora|chatgpt|instruct)/i.test(id))
       .sort();
   }
 
@@ -522,6 +523,12 @@ async function callProviderWithFallback(request) {
     recordUsage(result.usage);
     return result;
   } catch (primaryError) {
+    if (/only supports interactions api/i.test(primaryError.message || '')) {
+      primaryError.message = 'โมเดลนี้ไม่รองรับ Responses API กรุณาโหลดรายชื่อโมเดลใหม่และเลือกโมเดลข้อความรุ่นอื่น';
+    }
+    if (primaryError.status === 429) {
+      primaryError.message = `ผู้ให้บริการปฏิเสธคำขอเพราะโควตาหรือ Rate Limit: ${primaryError.message}`;
+    }
     if (!RETRYABLE_STATUS.has(primaryError.status)) throw primaryError;
     const settings = userSettings(requireLogin().id);
     const fallbackProvider = request.provider === 'openai' ? 'gemini' : 'openai';
