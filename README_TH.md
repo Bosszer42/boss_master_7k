@@ -1,4 +1,4 @@
-# BOSSMASTER AI CHAT & BATCH 0.2.0
+# BOSSMASTER AI CHAT & BATCH 0.2.1
 
 โปรแกรม Windows แยกอิสระสำหรับแชท AI เขียนโค้ด จดโน้ต และประมวลผลงานจำนวนมากผ่าน OpenAI/Gemini API
 
@@ -21,13 +21,13 @@
 
 ## ติดตั้งสำหรับผู้ใช้
 
-1. เปิด `BOSSMASTER_AI_CHAT_BATCH_Setup_0.2.0_x64.exe`
+1. เปิด `BOSSMASTER_AI_CHAT_BATCH_Setup_0.2.1_x64.exe`
 2. เลือกตำแหน่งติดตั้งและเปิดโปรแกรม
 3. ครั้งแรกสร้างบัญชี Owner
 4. เปิด Settings แล้วกรอก API Key ของผู้ให้บริการ
 5. โหลดรายชื่อโมเดลและเริ่มใช้งาน
 
-Portable เปิดได้โดยไม่ติดตั้งจาก `BOSSMASTER_AI_CHAT_BATCH_Portable_0.2.0_x64.exe`
+Portable เปิดได้โดยไม่ติดตั้งจาก `BOSSMASTER_AI_CHAT_BATCH_Portable_0.2.1_x64.exe`
 
 ## พัฒนาและทดสอบ
 

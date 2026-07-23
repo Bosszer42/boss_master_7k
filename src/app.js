@@ -486,6 +486,8 @@ $('#openCodeFolder').addEventListener('click', async () => {
     if (!workspace) return;
     state.codeRoot = workspace.root;
     state.codeFiles = workspace.files;
+    $('#codeWorkspacePanel').classList.remove('collapsed');
+    $('#toggleCodePanel').textContent = 'ย่อพื้นที่';
     $('#codeRoot').textContent = workspace.root;
     $('#codeFileList').innerHTML = workspace.files.map((file) => `<option value="${escapeHtml(file)}">${escapeHtml(file)}</option>`).join('');
   } catch (error) { toast(error.message, 'error'); }

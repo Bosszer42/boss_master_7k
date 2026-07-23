@@ -1,6 +1,6 @@
 {
   "name": "bossmaster-ai-chat-batch",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Custom AI chat and batch desktop application for Windows",
   "main": "main.js",
   "author": "BOSSMASTER",
