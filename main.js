@@ -32,6 +32,15 @@ const requestHistory = new Map();
 const codeWorkspaces = new Map();
 const { ensureBootstrapOwner } = require('./bootstrap-owner');
 const { migrateLegacyOwner, isSuperAdmin, canManageUsers, canViewAudit, canCreateUser, sanitizeUserForClient } = require('./security-rules');
+const {
+  parseWriterSources,
+  createWriterSelection,
+  buildWriterRequest,
+  parseWriterOutput,
+  validateWriterOutput,
+  packMetadata
+} = require('./writer-engine');
+let activeWriterAbortController = null;
 
 class JsonStore {
   constructor(filePath) {
@@ -51,6 +60,8 @@ class JsonStore {
         messages: [],
         jobs: [],
         notes: {},
+        writerPacks: [],
+        writerDrafts: [],
         audit: []
       };
     }
@@ -1191,6 +1202,262 @@ function registerIpc() {
     store.data.notes[user.id] = { content, updatedAt: new Date().toISOString() };
     store.save();
     return { updatedAt: store.data.notes[user.id].updatedAt, length: content.length };
+  });
+
+  ipcMain.handle('writer:list-packs', () => {
+    const user = requireLogin();
+    store.data.writerPacks ||= [];
+    return store.data.writerPacks
+      .filter((pack) => pack.userId === user.id)
+      .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))
+      .map(packMetadata);
+  });
+  ipcMain.handle('writer:get-pack', (_, packId) => {
+    const user = requireLogin();
+    store.data.writerPacks ||= [];
+    const pack = store.data.writerPacks.find((item) => item.id === packId && item.userId === user.id);
+    if (!pack) throw new Error('ไม่พบชุดข้อมูลงานเขียน');
+    return pack;
+  });
+  ipcMain.handle('writer:import-pack', async (_, payload = {}) => {
+    const user = requireWriter();
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'ชุดข้อมูลงานเขียน', extensions: ['txt', 'md', 'csv', 'json', 'xlsx', 'xlsm', 'zip'] },
+        { name: 'ทุกไฟล์', extensions: ['*'] }
+      ]
+    });
+    if (result.canceled) return null;
+    const files = result.filePaths.map((filePath) => ({
+      name: path.basename(filePath),
+      buffer: fs.readFileSync(filePath)
+    }));
+    const parsed = parseWriterSources(files, String(payload.name || '').trim());
+    const now = new Date().toISOString();
+    const pack = {
+      ...parsed,
+      id: crypto.randomUUID(),
+      userId: user.id,
+      createdAt: now,
+      updatedAt: now
+    };
+    store.data.writerPacks ||= [];
+    store.data.writerPacks.push(pack);
+    store.audit('writer_pack_imported', { packId: pack.id, name: pack.name, summary: pack.summary });
+    return packMetadata(pack);
+  });
+  ipcMain.handle('writer:delete-pack', (_, packId) => {
+    const user = requireWriter();
+    store.data.writerPacks ||= [];
+    const index = store.data.writerPacks.findIndex((item) => item.id === packId && item.userId === user.id);
+    if (index < 0) throw new Error('ไม่พบชุดข้อมูลงานเขียน');
+    const [removed] = store.data.writerPacks.splice(index, 1);
+    store.audit('writer_pack_deleted', { packId: removed.id, name: removed.name });
+    return { ok: true };
+  });
+  ipcMain.handle('writer:randomize', (_, payload = {}) => {
+    const user = requireLogin();
+    store.data.writerPacks ||= [];
+    const pack = store.data.writerPacks.find((item) => item.id === payload.packId && item.userId === user.id);
+    if (!pack) throw new Error('กรุณาเลือกและอัปโหลดชุดข้อมูลงานก่อน');
+    return createWriterSelection(pack, payload);
+  });
+  ipcMain.handle('writer:list-drafts', () => {
+    const user = requireLogin();
+    store.data.writerDrafts ||= [];
+    return store.data.writerDrafts
+      .filter((draft) => draft.userId === user.id)
+      .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))
+      .slice(0, 200)
+      .map((draft) => ({
+        id: draft.id,
+        name: draft.name,
+        packId: draft.packId,
+        site: draft.selection?.site || '',
+        status: draft.status,
+        errors: draft.errors || [],
+        updatedAt: draft.updatedAt || draft.createdAt,
+        output: draft.output
+      }));
+  });
+  ipcMain.handle('writer:save-draft', (_, payload = {}) => {
+    const user = requireWriter();
+    const serialized = JSON.stringify(payload);
+    if (Buffer.byteLength(serialized, 'utf8') > 3 * 1024 * 1024) throw new Error('ร่างงานใหญ่เกิน 3 MB');
+    store.data.writerDrafts ||= [];
+    let draft = payload.id
+      ? store.data.writerDrafts.find((item) => item.id === payload.id && item.userId === user.id)
+      : null;
+    const now = new Date().toISOString();
+    if (!draft) {
+      draft = { id: crypto.randomUUID(), userId: user.id, createdAt: now };
+      store.data.writerDrafts.push(draft);
+    }
+    Object.assign(draft, {
+      name: String(payload.name || payload.output?.title || 'ร่างโพสต์').slice(0, 200),
+      packId: payload.packId || null,
+      selection: payload.selection || {},
+      input: payload.input || {},
+      output: payload.output || {},
+      errors: Array.isArray(payload.errors) ? payload.errors : [],
+      status: payload.status || 'draft',
+      updatedAt: now
+    });
+    store.save();
+    return draft;
+  });
+  ipcMain.handle('writer:validate', (_, payload = {}) => {
+    requireLogin();
+    const output = payload.output && typeof payload.output === 'object'
+      ? payload.output
+      : parseWriterOutput(payload.output || '{}');
+    const request = {
+      outputRules: payload.outputRules || {},
+      sourceFacts: payload.sourceFacts || {}
+    };
+    return { output, errors: validateWriterOutput(output, request, payload.selection || {}) };
+  });
+  ipcMain.handle('writer:generate', async (event, payload = {}) => {
+    const user = requireWriter();
+    store.data.writerPacks ||= [];
+    const pack = store.data.writerPacks.find((item) => item.id === payload.packId && item.userId === user.id);
+    if (!pack) throw new Error('กรุณาเลือกชุดข้อมูลงานก่อน');
+    if (!payload.model) throw new Error('กรุณาเลือกโมเดลก่อน');
+    if (activeWriterAbortController) activeWriterAbortController.abort();
+    activeWriterAbortController = new AbortController();
+    const selection = payload.selection?.packId === pack.id
+      ? payload.selection
+      : createWriterSelection(pack, { ...payload.selection, packId: pack.id });
+    const request = buildWriterRequest(pack, selection, payload.input || {});
+    try {
+      const response = await callProviderWithFallback({
+        provider: payload.provider,
+        model: payload.model,
+        messages: [{ role: 'user', content: request.userMessage }],
+        systemPrompt: request.systemPrompt,
+        attachments: [],
+        temperature: Number(payload.temperature ?? 0.2),
+        maxOutputTokens: Number(payload.maxOutputTokens || 8192),
+        signal: activeWriterAbortController.signal,
+        onDelta: (delta) => {
+          if (!event.sender.isDestroyed()) event.sender.send('writer:stream-delta', { delta });
+        }
+      });
+      let output;
+      let errors = [];
+      try {
+        output = parseWriterOutput(response.text);
+        errors = validateWriterOutput(output, request, selection);
+      } catch (error) {
+        output = {
+          focus: selection.focusKeyword || '',
+          title: '',
+          meta: '',
+          content: response.text || '',
+          categories: selection.categories || [],
+          tags: selection.tags || [],
+          code: request.sourceFacts.code,
+          actor: request.sourceFacts.actor,
+          studio: request.sourceFacts.studio
+        };
+        errors = [`อ่าน Structured Output ไม่สำเร็จ: ${error.message}`];
+      }
+      const now = new Date().toISOString();
+      const draft = {
+        id: crypto.randomUUID(),
+        userId: user.id,
+        name: String(output.title || payload.name || 'ร่างโพสต์').slice(0, 200),
+        packId: pack.id,
+        selection,
+        input: payload.input || {},
+        output,
+        request: { sourceFacts: request.sourceFacts, outputRules: request.outputRules },
+        errors,
+        status: errors.length ? 'needs_review' : 'pass',
+        provider: response.fallbackProvider || payload.provider,
+        model: response.fallbackModel || payload.model,
+        usage: response.usage || {},
+        createdAt: now,
+        updatedAt: now
+      };
+      store.data.writerDrafts ||= [];
+      store.data.writerDrafts.push(draft);
+      store.audit('writer_post_generated', {
+        draftId: draft.id,
+        packId: pack.id,
+        status: draft.status,
+        provider: draft.provider,
+        model: draft.model
+      });
+      return draft;
+    } finally {
+      activeWriterAbortController = null;
+    }
+  });
+  ipcMain.handle('writer:stop', () => {
+    if (activeWriterAbortController) {
+      activeWriterAbortController.abort();
+      activeWriterAbortController = null;
+    }
+    return { ok: true };
+  });
+  ipcMain.handle('writer:export', async (_, payload = {}) => {
+    const user = requireLogin();
+    store.data.writerDrafts ||= [];
+    const draft = store.data.writerDrafts.find((item) => item.id === payload.draftId && item.userId === user.id);
+    if (!draft) throw new Error('ไม่พบร่างโพสต์');
+    const safeName = String(draft.output?.title || draft.name || 'writer_result').replace(/[<>:"/\\|?*\u0000-\u001F]+/g, '_').slice(0, 80);
+    const result = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: path.join(getDataDir(), 'exports', `${safeName || 'writer_result'}.xlsx`),
+      filters: [
+        { name: 'Excel', extensions: ['xlsx'] },
+        { name: 'CSV UTF-8', extensions: ['csv'] },
+        { name: 'JSON', extensions: ['json'] },
+        { name: 'Markdown', extensions: ['md'] }
+      ]
+    });
+    if (result.canceled) return null;
+    const row = {
+      focus: draft.output?.focus || '',
+      title: draft.output?.title || '',
+      meta: draft.output?.meta || '',
+      content: draft.output?.content || '',
+      categories: Array.isArray(draft.output?.categories) ? draft.output.categories.join(', ') : draft.output?.categories || '',
+      tags: Array.isArray(draft.output?.tags) ? draft.output.tags.join(', ') : draft.output?.tags || '',
+      code: draft.output?.code || '',
+      actor: draft.output?.actor || '',
+      studio: draft.output?.studio || '',
+      site: draft.selection?.site || '',
+      seed: draft.selection?.seed || '',
+      status: draft.status,
+      validation_errors: (draft.errors || []).join(' | ')
+    };
+    const extension = path.extname(result.filePath).toLocaleLowerCase();
+    if (extension === '.json') {
+      fs.writeFileSync(result.filePath, JSON.stringify({ ...draft, userId: undefined }, null, 2), 'utf8');
+    } else if (extension === '.csv') {
+      const csv = XLSX.utils.sheet_to_csv(XLSX.utils.json_to_sheet([row]));
+      fs.writeFileSync(result.filePath, `\uFEFF${csv}`, 'utf8');
+    } else if (extension === '.md') {
+      const markdown = [
+        `# ${row.title}`,
+        '',
+        row.meta ? `> ${row.meta}` : '',
+        '',
+        row.content,
+        '',
+        row.categories ? `Categories: ${row.categories}` : '',
+        row.tags ? `Tags: ${row.tags}` : ''
+      ].filter((line, index, all) => line || all[index - 1] !== '').join('\n');
+      fs.writeFileSync(result.filePath, markdown, 'utf8');
+    } else {
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([row]), 'POST');
+      XLSX.writeFile(workbook, result.filePath);
+    }
+    shell.showItemInFolder(result.filePath);
+    return result.filePath;
   });
   ipcMain.handle('clipboard:write-text', (_, text) => {
     requireLogin();

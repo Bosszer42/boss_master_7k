@@ -7,7 +7,9 @@ const state = {
   rooms: [], activeRoom: null, attachments: [], jobs: [], activeJob: null, busy: false,
   noteLoaded: false, noteSaveTimer: null, streamingText: '', streamingStarted: false,
   codeRoot: '', codeFiles: [], codeFile: null, codeOriginal: '',
-  projects: [], selectedProjectId: null, recentFiles: [], inspectorTab: 'tools', roomSearchText: ''
+  projects: [], selectedProjectId: null, recentFiles: [], inspectorTab: 'tools', roomSearchText: '',
+  writerLoaded: false, writerPacks: [], writerPack: null, writerSelection: null,
+  writerDrafts: [], writerDraft: null, writerBusy: false, writerStreamingText: ''
 };
 
 function showActivity(title = 'กำลังทำงาน...', detail = 'กรุณารอสักครู่') {
@@ -216,10 +218,11 @@ async function loadAppData() {
   showActivity('กำลังโหลดข้อมูล...', 'เตรียมห้อง แชท งานและการตั้งค่าของคุณ');
   try {
     state.settings = await window.bossAPI.getSettings();
+    updateInspectorContent();
     $('#providerSelect').value = state.settings.provider || 'openai';
-    $('#temperature').value = state.settings.temperature ?? 0.4;
-    $('#temperatureValue').textContent = $('#temperature').value;
-    $('#maxOutputTokens').value = state.settings.maxOutputTokens || 4096;
+    if ($('#temperature')) $('#temperature').value = state.settings.temperature ?? 0.4;
+    if ($('#temperatureValue')) $('#temperatureValue').textContent = $('#temperature')?.value || state.settings.temperature || 0.4;
+    if ($('#maxOutputTokens')) $('#maxOutputTokens').value = state.settings.maxOutputTokens || 4096;
     $('#dailyTokenBudget').value = state.settings.dailyTokenBudget || 0;
     $('#requestsPerMinute').value = state.settings.requestsPerMinute || 30;
     renderKeyStatus();
@@ -322,17 +325,20 @@ function setMode(mode) {
   $$('.mode').forEach((button) => button.classList.toggle('active', button.dataset.mode === mode));
   const batch = mode === 'batch';
   const notepad = mode === 'notepad';
-  $('#chatView').classList.toggle('hidden', batch || notepad);
+  const writer = mode === 'writer';
+  $('#chatView').classList.toggle('hidden', batch || notepad || writer);
   $('#batchView').classList.toggle('hidden', !batch);
   $('#notepadView').classList.toggle('hidden', !notepad);
+  $('#writerView').classList.toggle('hidden', !writer);
   $('#codeWorkspacePanel').classList.toggle('hidden', mode !== 'code');
-  $('#newRoomButton').classList.toggle('hidden', batch || notepad);
+  $('#newRoomButton').classList.toggle('hidden', batch || notepad || writer);
   $('#newBatchButton').classList.toggle('hidden', !batch);
   updateInspectorContent();
   const info = {
     normal: ['แชทธรรมดา','ไม่มีคิว ไม่มี Validator และไม่บังคับรูปแบบผลลัพธ์'],
     code: ['เขียนโค้ด','แยกจากกฎเนื้อหา รองรับแนบไฟล์โค้ดและบทสนทนาต่อเนื่อง'],
     batch: ['งานจำนวนมาก','ประมวลผล 100–1,000+ รายการ ครั้งละ 1–6 พร้อม Validator และ Checkpoint'],
+    writer: ['เขียนโพสต์','อัปโหลดชุดคีย์เวิร์ด แท็ก หมวดหมู่ และกฎเอง สุ่มจัดชุด เขียน ตรวจ และส่งออกได้ในหน้าเดียว'],
     notepad: ['Notepad ส่วนตัว','บันทึกข้อความในเครื่อง แยกตามบัญชี และไม่ส่งข้อมูลเข้า AI']
   }[mode];
   $('#modeInfo').innerHTML = `<h3>${info[0]}</h3><p>${info[1]}</p>`;
@@ -341,6 +347,7 @@ function setMode(mode) {
     $('#assistantPreset').value = 'code'; applyAssistantPreset();
   }
   if (batch) renderActiveJob();
+  if (writer) loadWriterWorkspace();
   if (notepad) loadNote();
 }
 
@@ -377,6 +384,296 @@ function scheduleNoteSave() {
   }, 600);
 }
 
+function splitWriterList(value) {
+  return String(value || '').split(/\r?\n|[,;|]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function writerInputPayload() {
+  return {
+    code: $('#writerCode').value.trim(),
+    actor: $('#writerActor').value.trim(),
+    studio: $('#writerStudio').value.trim(),
+    sourceTitle: $('#writerSourceTitle').value.trim(),
+    sourceContent: $('#writerSourceContent').value.trim(),
+    extraFacts: $('#writerExtraFacts').value.trim(),
+    titleMin: Number($('#writerTitleMin').value || 0),
+    titleMax: Number($('#writerTitleMax').value || 0),
+    metaMin: Number($('#writerMetaMin').value || 0),
+    metaMax: Number($('#writerMetaMax').value || 0),
+    contentMin: Number($('#writerContentMin').value || 0),
+    paragraphs: Number($('#writerParagraphs').value || 0),
+    forbiddenTerms: $('#writerForbiddenTerms').value
+  };
+}
+
+function writerOutputPayload() {
+  return {
+    focus: $('#writerOutputFocus').value.trim(),
+    title: $('#writerOutputTitle').value.trim(),
+    meta: $('#writerOutputMeta').value.trim(),
+    content: $('#writerOutputContent').value,
+    categories: splitWriterList($('#writerOutputCategories').value),
+    tags: splitWriterList($('#writerOutputTags').value),
+    code: $('#writerCode').value.trim(),
+    actor: $('#writerActor').value.trim(),
+    studio: $('#writerStudio').value.trim()
+  };
+}
+
+function writerSelectionPayload() {
+  return {
+    ...(state.writerSelection || {}),
+    packId: state.writerPack?.id || $('#writerPackSelect').value,
+    packName: state.writerPack?.name || '',
+    site: $('#writerSite').value,
+    mode: $('#writerMode').value,
+    seed: $('#writerSeed').value.trim(),
+    focusKeyword: $('#writerFocus').value.trim(),
+    supportKeywords: splitWriterList($('#writerSupportKeywords').value),
+    categories: splitWriterList($('#writerCategories').value),
+    tags: splitWriterList($('#writerTags').value)
+  };
+}
+
+function renderWriterPacks() {
+  const selected = state.writerPack?.id || $('#writerPackSelect').value;
+  $('#writerPackSelect').innerHTML = '<option value="">เลือกชุดข้อมูล</option>' + state.writerPacks.map((pack) =>
+    `<option value="${escapeHtml(pack.id)}">${escapeHtml(pack.name)}</option>`).join('');
+  if (state.writerPacks.some((pack) => pack.id === selected)) $('#writerPackSelect').value = selected;
+  renderWriterPackSummary();
+}
+
+function renderWriterPackSummary() {
+  const pack = state.writerPacks.find((item) => item.id === $('#writerPackSelect').value) || state.writerPack;
+  if (!pack) {
+    $('#writerPackSummary').textContent = 'ยังไม่ได้อัปโหลดข้อมูล';
+    $('#writerSite').innerHTML = '<option value="">ทุกเว็บไซต์ / กำหนดเอง</option>';
+    return;
+  }
+  const summary = pack.summary || {};
+  $('#writerPackSummary').textContent = `${summary.sites || pack.sites?.length || 0} เว็บ · ${summary.keywords || 0} คีย์ · ${summary.tagSets || 0} ชุดแท็ก · ${summary.prompts || 0} Prompt`;
+  const currentSite = $('#writerSite').value;
+  $('#writerSite').innerHTML = '<option value="">ทุกเว็บไซต์ / กำหนดเอง</option>' + (pack.sites || []).map((site) =>
+    `<option value="${escapeHtml(site)}">${escapeHtml(site)}</option>`).join('');
+  if ((pack.sites || []).includes(currentSite)) $('#writerSite').value = currentSite;
+}
+
+function renderWriterDrafts() {
+  const selected = state.writerDraft?.id || $('#writerDraftSelect').value;
+  $('#writerDraftSelect').innerHTML = '<option value="">ร่างล่าสุด</option>' + state.writerDrafts.map((draft) =>
+    `<option value="${escapeHtml(draft.id)}">${escapeHtml(draft.name || 'ร่างโพสต์')} · ${escapeHtml(draft.status || 'draft')}</option>`).join('');
+  if (state.writerDrafts.some((draft) => draft.id === selected)) $('#writerDraftSelect').value = selected;
+}
+
+async function loadWriterWorkspace(force = false) {
+  if (state.writerLoaded && !force) return;
+  showActivity('กำลังโหลด Writer Workspace...', 'เตรียมชุดข้อมูลและร่างโพสต์ของบัญชีนี้');
+  try {
+    const [packs, drafts] = await Promise.all([
+      window.bossAPI.listWriterPacks(),
+      window.bossAPI.listWriterDrafts()
+    ]);
+    state.writerPacks = packs;
+    state.writerDrafts = drafts;
+    state.writerLoaded = true;
+    renderWriterPacks();
+    renderWriterDrafts();
+    if (packs.length && !state.writerPack) {
+      $('#writerPackSelect').value = packs[0].id;
+      await selectWriterPack(packs[0].id);
+    }
+  } catch (error) { toast(error.message, 'error'); }
+  finally { hideActivity(); }
+}
+
+async function selectWriterPack(packId) {
+  if (!packId) {
+    state.writerPack = null;
+    state.writerSelection = null;
+    renderWriterPackSummary();
+    return;
+  }
+  showActivity('กำลังเปิดชุดข้อมูลงาน...', 'โหลดคีย์เวิร์ด แท็ก หมวดหมู่ Prompt และกฎ');
+  try {
+    state.writerPack = await window.bossAPI.getWriterPack(packId);
+    $('#writerPackSelect').value = packId;
+    renderWriterPackSummary();
+    $('#writerSelectionStatus').textContent = 'พร้อมสุ่มจัดชุด';
+  } catch (error) { toast(error.message, 'error'); }
+  finally { hideActivity(); }
+}
+
+async function importWriterData() {
+  showActivity('กำลังนำเข้าข้อมูลงาน...', 'อ่านไฟล์อย่างปลอดภัยและจัดหมวดคีย์เวิร์ด/แท็ก/กฎ');
+  try {
+    const pack = await window.bossAPI.importWriterPack({ name: $('#writerPackName').value.trim() });
+    if (!pack) return;
+    state.writerPacks.unshift(pack);
+    state.writerPack = await window.bossAPI.getWriterPack(pack.id);
+    $('#writerPackName').value = '';
+    renderWriterPacks();
+    $('#writerPackSelect').value = pack.id;
+    renderWriterPackSummary();
+    toast(`นำเข้าชุด “${pack.name}” แล้ว`, 'success');
+  } catch (error) { toast(error.message, 'error'); }
+  finally { hideActivity(); }
+}
+
+async function randomizeWriterData() {
+  const packId = $('#writerPackSelect').value;
+  if (!packId) return toast('กรุณาอัปโหลดหรือเลือกชุดข้อมูลงานก่อน', 'error');
+  showActivity('กำลังสุ่มจัดชุด...', 'เลือก Focus, คีย์สนับสนุน, แท็ก และหมวดหมู่ตามเว็บไซต์');
+  try {
+    const selection = await window.bossAPI.randomizeWriterData({
+      packId,
+      site: $('#writerSite').value,
+      mode: $('#writerMode').value,
+      seed: $('#writerSeed').value.trim(),
+      focusKeyword: $('#writerFocus').value.trim(),
+      supportKeywords: $('#writerSupportKeywords').value,
+      categories: $('#writerCategories').value,
+      tags: $('#writerTags').value,
+      supportKeywordCount: Number($('#writerSupportCount').value),
+      tagCount: Number($('#writerTagCount').value),
+      categoryCount: Number($('#writerCategoryCount').value)
+    });
+    state.writerSelection = selection;
+    $('#writerSeed').value = selection.seed;
+    $('#writerFocus').value = selection.focusKeyword || '';
+    $('#writerSupportKeywords').value = (selection.supportKeywords || []).join(', ');
+    $('#writerCategories').value = (selection.categories || []).join(', ');
+    $('#writerTags').value = (selection.tags || []).join(', ');
+    $('#writerOutputFocus').value = selection.focusKeyword || '';
+    $('#writerOutputCategories').value = (selection.categories || []).join(', ');
+    $('#writerOutputTags').value = (selection.tags || []).join(', ');
+    $('#writerSelectionStatus').textContent = `Seed: ${selection.seed} · ${selection.supportKeywords.length} คีย์สนับสนุน · ${selection.tags.length} แท็ก`;
+    toast('สุ่มจัดชุดเรียบร้อย', 'success');
+  } catch (error) { toast(error.message, 'error'); }
+  finally { hideActivity(); }
+}
+
+function populateWriterOutput(output = {}) {
+  $('#writerOutputFocus').value = output.focus || '';
+  $('#writerOutputTitle').value = output.title || '';
+  $('#writerOutputMeta').value = output.meta || '';
+  $('#writerOutputContent').value = output.content || '';
+  $('#writerOutputCategories').value = Array.isArray(output.categories) ? output.categories.join(', ') : (output.categories || '');
+  $('#writerOutputTags').value = Array.isArray(output.tags) ? output.tags.join(', ') : (output.tags || '');
+}
+
+function renderWriterValidation(errors = [], status = '') {
+  const element = $('#writerValidation');
+  element.className = `writer-validation ${errors.length ? 'failed' : status === 'idle' ? 'idle' : 'passed'}`;
+  element.innerHTML = errors.length
+    ? `<strong>ตรวจไม่ผ่าน ${errors.length} จุด</strong><ul>${errors.map((error) => `<li>${escapeHtml(error)}</li>`).join('')}</ul>`
+    : status === 'idle'
+      ? 'ยังไม่ได้ตรวจผล'
+      : '<strong>PASS</strong> โครงสร้างและกฎที่กำหนดผ่านแล้ว';
+}
+
+async function generateWriterPost() {
+  if (state.writerBusy) return;
+  const packId = $('#writerPackSelect').value;
+  if (!packId) return toast('กรุณาอัปโหลดหรือเลือกชุดข้อมูลงานก่อน', 'error');
+  const model = $('#modelSelect').value;
+  if (!model) return toast('กรุณาเลือกโมเดลก่อน', 'error');
+  if (!state.writerSelection || state.writerSelection.packId !== packId) await randomizeWriterData();
+  if (!state.writerSelection) return;
+  state.writerBusy = true;
+  state.writerStreamingText = '';
+  $('#generateWriterPost').classList.add('hidden');
+  $('#stopWriterPost').classList.remove('hidden');
+  $('#writerOutputContent').value = '';
+  renderWriterValidation([], 'idle');
+  showActivity('AI กำลังเขียนโพสต์...', `${$('#providerSelect').value} · ${model}`);
+  try {
+    const draft = await window.bossAPI.generateWriterPost({
+      packId,
+      provider: $('#providerSelect').value,
+      model,
+      selection: writerSelectionPayload(),
+      input: writerInputPayload(),
+      temperature: Math.min(Number($('#temperature')?.value ?? state.settings?.temperature ?? 0.2), 0.5),
+      maxOutputTokens: Number($('#maxOutputTokens')?.value ?? state.settings?.maxOutputTokens ?? 8192)
+    });
+    state.writerDraft = draft;
+    populateWriterOutput(draft.output);
+    renderWriterValidation(draft.errors || [], draft.status);
+    state.writerDrafts = await window.bossAPI.listWriterDrafts();
+    renderWriterDrafts();
+    $('#writerDraftSelect').value = draft.id;
+    toast(draft.errors?.length ? 'เขียนเสร็จแล้ว แต่มีจุดที่ต้องตรวจ' : 'เขียนและตรวจผลแล้ว', draft.errors?.length ? '' : 'success');
+  } catch (error) {
+    if (error?.message?.includes('AbortError') || error?.name === 'AbortError') toast('หยุดการเขียนแล้ว');
+    else toast(error.message, 'error');
+  } finally {
+    state.writerBusy = false;
+    state.writerStreamingText = '';
+    $('#generateWriterPost').classList.remove('hidden');
+    $('#stopWriterPost').classList.add('hidden');
+    hideActivity();
+  }
+}
+
+async function validateWriterPost() {
+  try {
+    const input = writerInputPayload();
+    const result = await window.bossAPI.validateWriterDraft({
+      output: writerOutputPayload(),
+      selection: writerSelectionPayload(),
+      sourceFacts: {
+        code: input.code,
+        actor: input.actor,
+        studio: input.studio
+      },
+      outputRules: {
+        titleMin: input.titleMin,
+        titleMax: input.titleMax,
+        metaMin: input.metaMin,
+        metaMax: input.metaMax,
+        contentMin: input.contentMin,
+        paragraphs: input.paragraphs,
+        forbiddenTerms: splitWriterList(input.forbiddenTerms)
+      }
+    });
+    renderWriterValidation(result.errors || [], result.errors?.length ? 'needs_review' : 'pass');
+    return result;
+  } catch (error) {
+    toast(error.message, 'error');
+    return null;
+  }
+}
+
+async function saveWriterDraft() {
+  const validation = await validateWriterPost();
+  if (!validation) return;
+  try {
+    const draft = await window.bossAPI.saveWriterDraft({
+      id: state.writerDraft?.id,
+      name: $('#writerOutputTitle').value.trim() || 'ร่างโพสต์',
+      packId: $('#writerPackSelect').value || null,
+      selection: writerSelectionPayload(),
+      input: writerInputPayload(),
+      output: writerOutputPayload(),
+      errors: validation.errors || [],
+      status: validation.errors?.length ? 'needs_review' : 'pass'
+    });
+    state.writerDraft = draft;
+    state.writerDrafts = await window.bossAPI.listWriterDrafts();
+    renderWriterDrafts();
+    $('#writerDraftSelect').value = draft.id;
+    toast('บันทึกร่างแล้ว', 'success');
+  } catch (error) { toast(error.message, 'error'); }
+}
+
+function openWriterDraft(draftId) {
+  const draft = state.writerDrafts.find((item) => item.id === draftId);
+  if (!draft) return;
+  state.writerDraft = draft;
+  populateWriterOutput(draft.output || {});
+  renderWriterValidation(draft.errors || [], draft.status);
+}
+
 function applyAssistantPreset() {
   const preset = $('#assistantPreset').value;
   const prompts = {
@@ -410,8 +707,9 @@ async function sendMessage() {
   try {
     const result = await window.bossAPI.sendChat({
       roomId: state.activeRoom.id, content, attachments: state.attachments,
-      provider, model, systemPrompt: $('#systemPrompt').value,
-      temperature: Number($('#temperature').value), maxOutputTokens: Number($('#maxOutputTokens').value)
+      provider, model, systemPrompt: $('#systemPrompt')?.value || state.activeRoom?.systemPrompt || '',
+      temperature: Number($('#temperature')?.value ?? state.settings?.temperature ?? 0.4),
+      maxOutputTokens: Number($('#maxOutputTokens')?.value ?? state.settings?.maxOutputTokens ?? 4096)
     });
     $('#composer').value = '';
     state.attachments = [];
@@ -445,6 +743,14 @@ window.bossAPI.onChatDelta(({ roomId, delta }) => {
   }
   state.streamingText += String(delta || '');
   renderStreamingMessage();
+});
+
+window.bossAPI.onWriterDelta(({ delta }) => {
+  if (!state.writerBusy) return;
+  state.writerStreamingText += String(delta || '');
+  $('#writerOutputContent').value = state.writerStreamingText;
+  $('#writerOutputContent').scrollTop = $('#writerOutputContent').scrollHeight;
+  updateActivity('AI กำลังเขียนโพสต์...', 'กำลังรับ Structured Output แบบเรียลไทม์');
 });
 
 async function selectAttachments() {
@@ -487,7 +793,8 @@ async function saveSettings() {
     const payload = {
       provider: $('#providerSelect').value,
       openaiKey: $('#openaiKey').value.trim(), geminiKey: $('#geminiKey').value.trim(),
-      temperature: Number($('#temperature').value), maxOutputTokens: Number($('#maxOutputTokens').value),
+      temperature: Number($('#temperature')?.value ?? state.settings?.temperature ?? 0.4),
+      maxOutputTokens: Number($('#maxOutputTokens')?.value ?? state.settings?.maxOutputTokens ?? 4096),
       dailyTokenBudget: Number($('#dailyTokenBudget').value),
       requestsPerMinute: Number($('#requestsPerMinute').value)
     };
@@ -563,7 +870,7 @@ async function importBatch() {
   try {
     const job = await window.bossAPI.importBatch({
       name: $('#batchName').value.trim(), instruction: $('#batchInstruction').value.trim(),
-      systemPrompt: $('#systemPrompt').value, provider, model,
+      systemPrompt: $('#systemPrompt')?.value || state.activeRoom?.systemPrompt || '', provider, model,
       batchSize: Number($('#batchSize').value), retry: Number($('#batchRetry').value),
       delayMs: Number($('#batchDelay').value), temperature: 0.2, maxOutputTokens: 8192,
       requiredFields: $('#batchRequiredFields').value,
@@ -627,6 +934,25 @@ function updateInspectorContent() {
   roomPanel.classList.toggle('hidden', state.inspectorTab !== 'room');
   if (state.inspectorTab === 'tools') {
     const room = state.activeRoom;
+    if (state.mode === 'writer') {
+      const summary = state.writerPack?.summary || {};
+      toolsPanel.innerHTML = `
+        <section>
+          <h3>Writer Workspace</h3>
+          <div class="inspector-stat"><span>ชุดข้อมูล</span><strong>${escapeHtml(state.writerPack?.name || 'ยังไม่ได้เลือก')}</strong></div>
+          <div class="inspector-stat"><span>คีย์เวิร์ด</span><strong>${Number(summary.keywords || 0).toLocaleString()}</strong></div>
+          <div class="inspector-stat"><span>ชุดแท็ก</span><strong>${Number(summary.tagSets || 0).toLocaleString()}</strong></div>
+          <div class="inspector-stat"><span>Prompt / กฎ</span><strong>${Number(summary.prompts || 0) + Number(summary.rules || 0)}</strong></div>
+        </section>
+        <section>
+          <h3>ตั้งค่าการเขียน</h3>
+          <label>Temperature <output id="temperatureValue">${escapeHtml(state.settings?.temperature ?? 0.4)}</output><input id="temperature" type="range" min="0" max="1" step="0.1" value="${escapeHtml(state.settings?.temperature ?? 0.4)}" /></label>
+          <label>Max output tokens<input id="maxOutputTokens" type="number" min="256" max="65536" value="${escapeHtml(state.settings?.maxOutputTokens || 4096)}" /></label>
+          <div class="hint">กฎและ Prompt มาจากชุดข้อมูลที่คุณอัปโหลด ไม่ได้ฝังในตัวติดตั้ง</div>
+        </section>`;
+      $('#temperature').addEventListener('input', () => $('#temperatureValue').textContent = $('#temperature').value);
+      return;
+    }
     if (state.mode === 'notepad') {
       toolsPanel.innerHTML = `
         <section>
@@ -655,9 +981,27 @@ function updateInspectorContent() {
       </section>`;
     $('#assistantPreset').value = $('#assistantPreset').value || 'general';
     $('#systemPrompt').value = room?.systemPrompt || '';
+    $('#assistantPreset').addEventListener('change', applyAssistantPreset);
+    $('#systemPrompt').addEventListener('change', persistRoomSettings);
+    $('#temperature').addEventListener('input', () => $('#temperatureValue').textContent = $('#temperature').value);
     return;
   }
   if (state.inspectorTab === 'room') {
+    if (state.mode === 'writer') {
+      roomPanel.innerHTML = `
+        <section>
+          <h3>ข้อมูลงานเขียน</h3>
+          <div class="inspector-room-card">
+            <div><strong>${escapeHtml(state.writerDraft?.name || 'ยังไม่ได้เลือกร่าง')}</strong></div>
+            <div class="hint">ชุดข้อมูล: ${escapeHtml(state.writerPack?.name || '-')}</div>
+            <div class="hint">เว็บไซต์: ${escapeHtml($('#writerSite').value || '-')}</div>
+            <div class="hint">โหมด: ${escapeHtml($('#writerMode').value || '-')}</div>
+            <div class="hint">Seed: ${escapeHtml($('#writerSeed').value || '-')}</div>
+            <div class="hint">สถานะ: ${escapeHtml(state.writerDraft?.status || 'draft')}</div>
+          </div>
+        </section>`;
+      return;
+    }
     const room = state.activeRoom;
     roomPanel.innerHTML = `
       <section>
@@ -776,6 +1120,58 @@ $('#createUserButton').addEventListener('click', async () => {
     toast('สร้างผู้ใช้แล้ว', 'success');
   } catch (error) { toast(error.message, 'error'); }
 });
+$('#importWriterData').addEventListener('click', importWriterData);
+$('#writerPackSelect').addEventListener('change', async () => {
+  await selectWriterPack($('#writerPackSelect').value);
+  updateInspectorContent();
+});
+$('#deleteWriterPack').addEventListener('click', async () => {
+  const packId = $('#writerPackSelect').value;
+  if (!packId) return toast('ยังไม่ได้เลือกชุดข้อมูล', 'error');
+  const pack = state.writerPacks.find((item) => item.id === packId);
+  if (!confirm(`ลบชุดข้อมูล “${pack?.name || 'ชุดที่เลือก'}” หรือไม่? ร่างโพสต์เดิมจะยังอยู่`)) return;
+  try {
+    await window.bossAPI.deleteWriterPack(packId);
+    state.writerPack = null;
+    state.writerSelection = null;
+    state.writerPacks = await window.bossAPI.listWriterPacks();
+    renderWriterPacks();
+    toast('ลบชุดข้อมูลแล้ว', 'success');
+  } catch (error) { toast(error.message, 'error'); }
+});
+$('#randomizeWriterData').addEventListener('click', randomizeWriterData);
+$('#generateWriterPost').addEventListener('click', generateWriterPost);
+$('#stopWriterPost').addEventListener('click', async () => {
+  if (!state.writerBusy) return;
+  $('#stopWriterPost').disabled = true;
+  try { await window.bossAPI.stopWriterPost(); }
+  finally { $('#stopWriterPost').disabled = false; }
+});
+$('#validateWriterPost').addEventListener('click', validateWriterPost);
+$('#saveWriterDraft').addEventListener('click', saveWriterDraft);
+$('#writerDraftSelect').addEventListener('change', () => openWriterDraft($('#writerDraftSelect').value));
+$('#copyWriterPost').addEventListener('click', async () => {
+  const output = writerOutputPayload();
+  const value = [
+    output.title,
+    output.meta,
+    output.content,
+    output.categories.length ? `Categories: ${output.categories.join(', ')}` : '',
+    output.tags.length ? `Tags: ${output.tags.join(', ')}` : ''
+  ].filter(Boolean).join('\n\n');
+  if (!value) return toast('ยังไม่มีผลลัพธ์ให้คัดลอก', 'error');
+  await copyTextToClipboard(value, 'คัดลอกโพสต์แล้ว');
+});
+$('#exportWriterPost').addEventListener('click', async () => {
+  if (!state.writerDraft?.id) await saveWriterDraft();
+  if (!state.writerDraft?.id) return;
+  showActivity('กำลังส่งออกร่างโพสต์...', 'เตรียม XLSX, CSV UTF-8, JSON หรือ Markdown');
+  try {
+    const file = await window.bossAPI.exportWriterDraft({ draftId: state.writerDraft.id });
+    if (file) toast('ส่งออกร่างโพสต์แล้ว', 'success');
+  } catch (error) { toast(error.message, 'error'); }
+  finally { hideActivity(); }
+});
 $('#openCodeFolder').addEventListener('click', async () => {
   showActivity('กำลังเปิดพื้นที่โค้ด...', 'สแกนไฟล์ในโฟลเดอร์และเตรียม Workspace');
   try {
@@ -840,9 +1236,6 @@ $('#saveCodeFile').addEventListener('click', async () => {
   } catch (error) { toast(error.message, 'error'); }
   finally { hideActivity(); }
 });
-$('#temperature').addEventListener('input', () => $('#temperatureValue').textContent = $('#temperature').value);
-$('#assistantPreset').addEventListener('change', applyAssistantPreset);
-$('#systemPrompt').addEventListener('change', persistRoomSettings);
 $('#renameRoom').addEventListener('click', async () => {
   if (!state.activeRoom) return; const title = prompt('ชื่อห้องใหม่', state.activeRoom.title); if (!title) return;
   state.activeRoom = await window.bossAPI.updateRoom({ id: state.activeRoom.id, patch: { title } }); await loadRooms(); await openRoom(state.activeRoom.id);

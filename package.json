@@ -1,6 +1,6 @@
 {
   "name": "bossmaster-ai-chat-batch",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Custom AI chat and batch desktop application for Windows",
   "main": "main.js",
   "author": "BOSSMASTER",
@@ -9,7 +9,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node --check main.js && node --check preload.js && node --check src/app.js && node --check scripts/reset-super-admin.js && node --test tests/mock-api-harness.test.js tests/bootstrap-owner.test.js tests/super-admin.test.js tests/reset-super-admin.test.js",
+    "test": "node --check main.js && node --check preload.js && node --check src/app.js && node --check writer-engine.js && node --check scripts/reset-super-admin.js && node --test tests/mock-api-harness.test.js tests/bootstrap-owner.test.js tests/super-admin.test.js tests/reset-super-admin.test.js tests/writer-engine.test.js",
+    "test:ui": "node scripts/ui-smoke.js",
     "server:start": "node server/src/server.js",
     "server:test": "node --test server/tests/*.test.js",
     "dist:win": "electron-builder --win nsis portable --publish never",
@@ -32,6 +33,7 @@
     "files": [
       "bootstrap-owner.js",
       "security-rules.js",
+      "writer-engine.js",
       "mock-api-harness.js",
       "main.js",
       "preload.js",

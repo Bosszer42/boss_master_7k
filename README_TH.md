@@ -1,4 +1,4 @@
-# BOSSMASTER AI CHAT & BATCH 0.2.3
+# BOSSMASTER AI CHAT & BATCH 0.3.0
 
 โปรแกรม Windows แยกอิสระสำหรับแชท AI เขียนโค้ด จดโน้ต และประมวลผลงานจำนวนมากผ่าน OpenAI/Gemini API
 
@@ -9,6 +9,9 @@
 - แชทแบบ Streaming พร้อมปุ่มหยุดทันที ประวัติหลายห้อง Dynamic Model List และตัวชี้สถานะ AI กำลังคิด/กำลังตอบ
 - แนบรูป TXT/MD/CSV/JSON/XLSX/PDF/DOCX และอ่าน ZIP แบบปลอดภัยโดยไม่รันไฟล์
 - Notepad ส่วนตัวบันทึกอัตโนมัติและไม่ส่งเข้า AI
+- Writer Workspace เป็นเมนูแยกสำหรับอัปโหลดชุดคีย์เวิร์ด แท็ก หมวดหมู่ Prompt และกฎ จาก TXT/MD/CSV/JSON/XLSX/XLSM/ZIP
+- สุ่ม Focus/Supporting Keywords/Tags/Categories แบบมี Seed, เขียนด้วย AI แบบ Streaming, ตรวจ Code/Actor/Studio และส่งออก XLSX/CSV/JSON/Markdown
+- ตัวติดตั้งไม่มีไฟล์ข้อมูล WorkPad หรือ Master Prompt ฝังอยู่ ผู้ใช้ต้องอัปโหลดข้อมูลเองหลังเข้าสู่ระบบ และข้อมูลแยกตามบัญชี
 - Code Workspace เปิดโฟลเดอร์ ค้นหา อ่าน แนบ และเขียนไฟล์หลังยืนยัน พร้อม Backup เดิม
 - Batch 1–6 รายการต่อชุด, Pause/Resume/Cancel, Retry/Backoff, Retry FAIL และ Checkpoint
 - Recovery งานค้างหลังเปิดโปรแกรมใหม่ และหยุดอัตโนมัติเมื่อผิดพลาดติดต่อกัน
@@ -21,19 +24,19 @@
 
 ## ติดตั้งสำหรับผู้ใช้
 
-1. เปิด `BOSSMASTER_AI_CHAT_BATCH_Setup_0.2.3_x64.exe`
+1. เปิด `BOSSMASTER_AI_CHAT_BATCH_Setup_0.3.0_x64.exe`
 2. เลือกตำแหน่งติดตั้งและเปิดโปรแกรม
 3. ครั้งแรกสร้างบัญชี Owner
 4. เปิด Settings แล้วกรอก API Key ของผู้ให้บริการ
 5. โหลดรายชื่อโมเดลและเริ่มใช้งาน
 
-Portable เปิดได้โดยไม่ติดตั้งจาก `BOSSMASTER_AI_CHAT_BATCH_Portable_0.2.3_x64.exe`
+Portable เปิดได้โดยไม่ติดตั้งจาก `BOSSMASTER_AI_CHAT_BATCH_Portable_0.3.0_x64.exe`
 
 ## Loading ใหม่และ Animation
 
 - แสดง loading แบบกล่องลอยพร้อมลูกหมุน จุดสามจุด และข้อความสถานะสำหรับกระบวนการต่าง ๆ
 - Streaming แสดงสถานะ `AI กำลังตอบ...` และ cursor กะพริบท้ายคำตอบอย่างนุ่มนวล
-- เพิ่ม transition สำหรับการสลับแท็บ Chat/Code/Batch/Notepad, dialog, toast และ progress bar
+- เพิ่ม transition สำหรับการสลับแท็บ Chat/Code/Batch/Writer/Notepad, dialog, toast และ progress bar
 - รองรับ `prefers-reduced-motion` เพื่อหลีกเลี่ยงภาพเคลื่อนไหวที่รบกวน
 
 ## พัฒนาและทดสอบ
@@ -56,13 +59,14 @@ npm run dist:win
 
 - `สำรองข้อมูล` เลือกตำแหน่งไฟล์ JSON
 - `กู้คืนข้อมูล` เลือกไฟล์สำรอง โปรแกรมจะสร้าง Safety Backup ของข้อมูลปัจจุบันก่อนเสมอ
-- การเปลี่ยนรหัสผ่านไม่ลบ Chat, Batch หรือ Notepad
+- การเปลี่ยนรหัสผ่านไม่ลบ Chat, Batch, Writer Draft หรือ Notepad
 
 ข้อมูลจริงอยู่ใน Electron userData ไม่ได้อยู่ในโฟลเดอร์ซอร์ส ห้ามนำ `database.json`, API Key, `node_modules` หรือ `release` ขึ้น Git
 
 ## โครงสร้างสำคัญ
 
-- `main.js` — API, Auth, Storage, Batch, Validator, Backup และ Code Workspace
+- `main.js` — API, Auth, Storage, Batch, Writer, Validator, Backup และ Code Workspace
+- `writer-engine.js` — อ่านชุดข้อมูลงาน สุ่มแบบมี Seed สร้าง Structured Prompt และตรวจผล
 - `preload.js` — IPC Bridge แบบจำกัดสิทธิ์
 - `src/index.html` — โครง UI
 - `src/app.js` — การทำงานฝั่งหน้าจอ
@@ -78,6 +82,7 @@ npm run dist:win
 2. ไฟล์ PDF/DOCX/ZIP
 3. Batch Sample พร้อม Pause/Resume/Retry FAIL
 4. Validator และ Auto Repair
+5. Writer Workspace หลังอัปโหลดชุดข้อมูลจริง: สุ่มคีย์ เขียน ตรวจ และส่งออก
 5. Export ทั้งสี่รูปแบบ
 
 ไม่ควรรับรองว่าเนื้อหาจากโมเดลถูกต้อง 100% ผล Batch ที่เข้มงวดต้องผ่าน Validator และรายการเสี่ยงควรตรวจโดยผู้ใช้

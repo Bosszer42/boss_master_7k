@@ -22,6 +22,22 @@ contextBridge.exposeInMainWorld('bossAPI', {
   listModels: (provider) => ipcRenderer.invoke('providers:list-models', provider),
   getNote: () => ipcRenderer.invoke('notes:get'),
   saveNote: (content) => ipcRenderer.invoke('notes:save', { content }),
+  listWriterPacks: () => ipcRenderer.invoke('writer:list-packs'),
+  getWriterPack: (packId) => ipcRenderer.invoke('writer:get-pack', packId),
+  importWriterPack: (payload) => ipcRenderer.invoke('writer:import-pack', payload),
+  deleteWriterPack: (packId) => ipcRenderer.invoke('writer:delete-pack', packId),
+  randomizeWriterData: (payload) => ipcRenderer.invoke('writer:randomize', payload),
+  listWriterDrafts: () => ipcRenderer.invoke('writer:list-drafts'),
+  saveWriterDraft: (payload) => ipcRenderer.invoke('writer:save-draft', payload),
+  validateWriterDraft: (payload) => ipcRenderer.invoke('writer:validate', payload),
+  generateWriterPost: (payload) => ipcRenderer.invoke('writer:generate', payload),
+  stopWriterPost: () => ipcRenderer.invoke('writer:stop'),
+  exportWriterDraft: (payload) => ipcRenderer.invoke('writer:export', payload),
+  onWriterDelta: (callback) => {
+    const listener = (_, payload) => callback(payload);
+    ipcRenderer.on('writer:stream-delta', listener);
+    return () => ipcRenderer.removeListener('writer:stream-delta', listener);
+  },
   copyText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   openCodeFolder: () => ipcRenderer.invoke('code:open-folder'),
   readCodeFile: (filePath) => ipcRenderer.invoke('code:read-file', filePath),

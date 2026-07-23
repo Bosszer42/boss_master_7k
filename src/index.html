@@ -43,6 +43,7 @@
         <button data-mode="normal" class="mode active">💬 แชทธรรมดา</button>
         <button data-mode="code" class="mode">&lt;/&gt; เขียนโค้ด</button>
         <button data-mode="batch" class="mode">▦ งานจำนวนมาก</button>
+        <button data-mode="writer" class="mode">✦ เขียนโพสต์</button>
         <button data-mode="notepad" class="mode">▤ Notepad</button>
       </nav>
       <div class="top-actions">
@@ -110,6 +111,104 @@
         </div>
       </section>
 
+      <section id="writerView" class="view writer-view hidden">
+        <div class="workspace-head writer-head">
+          <div>
+            <h2>Writer Workspace</h2>
+            <p>เขียนโพสต์ด้วยชุดคีย์เวิร์ด แท็ก หมวดหมู่ และกฎที่คุณอัปโหลดเอง ข้อมูลไม่ถูกรวมในตัวติดตั้ง</p>
+          </div>
+          <div class="head-actions">
+            <button id="importWriterData" class="accent">⇧ อัปโหลดข้อมูลงาน</button>
+            <button id="randomizeWriterData">⤨ สุ่มจัดชุด</button>
+            <button id="generateWriterPost" class="primary">✦ เขียนด้วย AI</button>
+            <button id="stopWriterPost" class="danger hidden">■ หยุด</button>
+          </div>
+        </div>
+        <div class="writer-scroll">
+          <section class="writer-card writer-data-card">
+            <div class="writer-card-title">
+              <div><h3>1. ชุดข้อมูลงาน</h3><p>รองรับ TXT, MD, CSV, JSON, XLSX, XLSM และ ZIP ที่ปลอดภัย</p></div>
+              <span id="writerPackSummary" class="writer-summary">ยังไม่ได้อัปโหลดข้อมูล</span>
+            </div>
+            <div class="writer-grid writer-grid-pack">
+              <label>ชื่อชุดใหม่<input id="writerPackName" placeholder="เช่น กฎและคีย์เว็บไซต์ชุดเดือนนี้" /></label>
+              <label>ชุดข้อมูลที่ใช้งาน<select id="writerPackSelect"><option value="">เลือกชุดข้อมูล</option></select></label>
+              <label>เว็บไซต์<select id="writerSite"><option value="">ทุกเว็บไซต์ / กำหนดเอง</option></select></label>
+              <label>โหมดการเขียน<select id="writerMode"><option value="normal">NORMAL</option><option value="fierce">FIERCE</option><option value="custom">CUSTOM</option></select></label>
+            </div>
+            <div class="writer-inline-actions">
+              <span class="hint">ไฟล์ข้อมูลจะถูกเก็บหลังเข้าสู่ระบบและแยกตามบัญชี ไม่มีไฟล์ข้อมูลตัวอย่างฝังในโปรแกรม</span>
+              <button id="deleteWriterPack" class="danger" type="button">ลบชุดที่เลือก</button>
+            </div>
+          </section>
+
+          <section class="writer-card">
+            <div class="writer-card-title"><div><h3>2. สุ่มคีย์ แท็ก และหมวดหมู่</h3><p>ใช้ Seed เดิมเพื่อสุ่มได้ผลชุดเดิมและตรวจสอบย้อนหลังได้</p></div><span id="writerSelectionStatus" class="writer-summary">รอสุ่มชุดข้อมูล</span></div>
+            <div class="writer-grid writer-grid-controls">
+              <label>Seed<input id="writerSeed" placeholder="ปล่อยว่างเพื่อสร้างอัตโนมัติ" /></label>
+              <label>คีย์สนับสนุน<input id="writerSupportCount" type="number" min="0" max="12" value="5" /></label>
+              <label>จำนวนแท็ก<input id="writerTagCount" type="number" min="0" max="50" value="10" /></label>
+              <label>จำนวนหมวดหมู่<input id="writerCategoryCount" type="number" min="0" max="10" value="2" /></label>
+            </div>
+            <div class="writer-grid writer-grid-selection">
+              <label>Focus Keyword<input id="writerFocus" placeholder="สุ่มจากชุดข้อมูลหรือพิมพ์เอง" /></label>
+              <label>Supporting Keywords<textarea id="writerSupportKeywords" rows="3" placeholder="คั่นด้วยจุลภาคหรือขึ้นบรรทัดใหม่"></textarea></label>
+              <label>Categories<textarea id="writerCategories" rows="3" placeholder="คั่นด้วยจุลภาคหรือขึ้นบรรทัดใหม่"></textarea></label>
+              <label>Tags<textarea id="writerTags" rows="3" placeholder="คั่นด้วยจุลภาคหรือขึ้นบรรทัดใหม่"></textarea></label>
+            </div>
+          </section>
+
+          <section class="writer-card">
+            <div class="writer-card-title"><div><h3>3. ข้อมูลต้นฉบับ</h3><p>AI ใช้เฉพาะข้อเท็จจริงในส่วนนี้ ช่องที่ไม่มีข้อมูลจะไม่ถูกเดาเพิ่ม</p></div></div>
+            <div class="writer-grid writer-grid-source">
+              <label>Code<input id="writerCode" /></label>
+              <label>Actor / ผู้เกี่ยวข้อง<input id="writerActor" /></label>
+              <label>Studio / แหล่งที่มา<input id="writerStudio" /></label>
+              <label>หัวข้อต้นฉบับ<input id="writerSourceTitle" /></label>
+            </div>
+            <label class="writer-wide-label">เนื้อหาต้นฉบับ<textarea id="writerSourceContent" rows="7" placeholder="วางข้อมูลต้นฉบับที่อนุญาตให้ AI ใช้"></textarea></label>
+            <label class="writer-wide-label">ข้อเท็จจริงเพิ่มเติม<textarea id="writerExtraFacts" rows="3" placeholder="ข้อมูลเพิ่มที่ยืนยันแล้วเท่านั้น"></textarea></label>
+          </section>
+
+          <section class="writer-card">
+            <details>
+              <summary>4. Validator และความยาวผลลัพธ์</summary>
+              <div class="writer-grid writer-grid-rules">
+                <label>Title ต่ำสุด<input id="writerTitleMin" type="number" min="0" value="0" /></label>
+                <label>Title สูงสุด<input id="writerTitleMax" type="number" min="0" value="0" /></label>
+                <label>Meta ต่ำสุด<input id="writerMetaMin" type="number" min="0" value="0" /></label>
+                <label>Meta สูงสุด<input id="writerMetaMax" type="number" min="0" value="0" /></label>
+                <label>Content ต่ำสุด<input id="writerContentMin" type="number" min="0" value="0" /></label>
+                <label>จำนวนย่อหน้า<input id="writerParagraphs" type="number" min="0" value="0" /></label>
+              </div>
+              <label class="writer-wide-label">คำต้องห้าม<textarea id="writerForbiddenTerms" rows="3" placeholder="คั่นด้วยจุลภาคหรือขึ้นบรรทัดใหม่"></textarea></label>
+            </details>
+          </section>
+
+          <section class="writer-card writer-output-card">
+            <div class="writer-card-title">
+              <div><h3>5. ผลลัพธ์และพรีวิว</h3><p>แก้ไขได้ ตรวจซ้ำได้ และส่งออกเฉพาะร่างที่เลือก</p></div>
+              <div class="writer-output-actions">
+                <select id="writerDraftSelect"><option value="">ร่างล่าสุด</option></select>
+                <button id="validateWriterPost" type="button">✓ ตรวจผล</button>
+                <button id="saveWriterDraft" type="button">บันทึกร่าง</button>
+                <button id="copyWriterPost" type="button">⧉ คัดลอก</button>
+                <button id="exportWriterPost" type="button">⇩ ส่งออก</button>
+              </div>
+            </div>
+            <div id="writerValidation" class="writer-validation idle">ยังไม่ได้ตรวจผล</div>
+            <div class="writer-grid writer-grid-output">
+              <label>Focus<input id="writerOutputFocus" /></label>
+              <label>Title<input id="writerOutputTitle" /></label>
+              <label>Meta<textarea id="writerOutputMeta" rows="3"></textarea></label>
+              <label>Categories<input id="writerOutputCategories" /></label>
+              <label>Tags<textarea id="writerOutputTags" rows="3"></textarea></label>
+            </div>
+            <label class="writer-wide-label">Content<textarea id="writerOutputContent" rows="14" placeholder="ผลลัพธ์จาก AI จะแสดงที่นี่แบบ Streaming"></textarea></label>
+          </section>
+        </div>
+      </section>
+
       <section id="notepadView" class="view notepad-view hidden">
         <div class="workspace-head">
           <div><h2>Notepad ส่วนตัว</h2><p>เก็บข้อความส่วนตัวในเครื่อง แยกตามบัญชี และไม่ส่งเข้า AI</p></div>
@@ -149,7 +248,7 @@
     </aside>
 
     <footer class="statusbar">
-      <span id="connectionStatus">● พร้อมตั้งค่า API</span><span id="contextStatus">ห้อง: -</span><span id="versionStatus">v0.2.3</span>
+      <span id="connectionStatus">● พร้อมตั้งค่า API</span><span id="contextStatus">ห้อง: -</span><span id="versionStatus">v0.3.0</span>
     </footer>
   </div>
 
