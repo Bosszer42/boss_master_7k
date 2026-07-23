@@ -30,7 +30,7 @@ async function bootstrap() {
   try {
     const info = await window.bossAPI.bootstrap();
     state.needsOwner = info.needsOwner;
-    $('#versionStatus').textContent = `v${info.appVersion} Alpha`;
+    $('#versionStatus').textContent = `v${info.appVersion}`;
     if (info.needsOwner) {
       $('#ownerFields').classList.remove('hidden');
       $('#authButton').textContent = 'สร้างบัญชี Owner';
@@ -489,6 +489,10 @@ $('#openCodeFolder').addEventListener('click', async () => {
     $('#codeRoot').textContent = workspace.root;
     $('#codeFileList').innerHTML = workspace.files.map((file) => `<option value="${escapeHtml(file)}">${escapeHtml(file)}</option>`).join('');
   } catch (error) { toast(error.message, 'error'); }
+});
+$('#toggleCodePanel').addEventListener('click', () => {
+  const collapsed = $('#codeWorkspacePanel').classList.toggle('collapsed');
+  $('#toggleCodePanel').textContent = collapsed ? 'ขยายพื้นที่' : 'ย่อพื้นที่';
 });
 $('#codeFileList').addEventListener('change', async () => {
   try {
