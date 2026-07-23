@@ -18,7 +18,13 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-call npm.cmd install
+if exist "node_modules\.pnpm" (
+  echo [INFO] Removing packages created by a different package manager...
+  rmdir /s /q "node_modules"
+)
+if exist "pnpm-lock.yaml" del /q "pnpm-lock.yaml"
+if exist "pnpm-workspace.yaml" del /q "pnpm-workspace.yaml"
+call npm.cmd install --legacy-peer-deps --no-audit --no-fund
 if errorlevel 1 goto error
 call npm.cmd test
 if errorlevel 1 goto error
