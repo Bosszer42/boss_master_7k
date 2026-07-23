@@ -83,7 +83,7 @@
       <section id="batchView" class="view batch-view hidden">
         <div class="workspace-head">
           <div><h2 id="jobTitle">ยังไม่ได้เลือกงาน Batch</h2><p id="jobSubtitle">นำเข้า CSV/XLSX/JSON แล้วกำหนดให้ทำครั้งละ 1–3 รายการ</p></div>
-          <div class="head-actions"><button id="batchStart" class="success">▶ เริ่ม/ทำต่อ</button><button id="batchPause">Ⅱ พัก</button><button id="batchCancel" class="danger">■ หยุด</button><button id="batchExport">⇩ ส่งออก</button></div>
+          <div class="head-actions"><button id="batchStart" class="success">▶ เริ่ม/ทำต่อ</button><button id="batchPause">Ⅱ พัก</button><button id="batchRetryFailed">↻ ลองใหม่เฉพาะ FAIL</button><button id="batchCancel" class="danger">■ หยุด</button><button id="batchExport">⇩ ส่งออก</button></div>
         </div>
         <div class="stats-grid">
           <div><span>ทั้งหมด</span><strong id="statTotal">0</strong></div><div><span>สำเร็จ</span><strong id="statSuccess">0</strong></div><div><span>กำลังทำ</span><strong id="statRunning">0</strong></div><div><span>รอทำ</span><strong id="statPending">0</strong></div><div><span>ผิดพลาด</span><strong id="statFailed">0</strong></div><div><span>ความคืบหน้า</span><strong id="statPercent">0%</strong></div>
@@ -137,6 +137,10 @@
         <label>หน่วง (มิลลิวินาที)<input id="batchDelay" type="number" min="0" value="2500" /></label>
       </div>
       <label>คำสั่งงาน<textarea id="batchInstruction" rows="8" placeholder="กำหนดกฎและโครงสร้างผลลัพธ์ให้ชัดเจน..."></textarea></label>
+      <div class="form-grid validator-grid">
+        <label>ช่องบังคับ (คั่นด้วยจุลภาค)<input id="batchRequiredFields" placeholder="title, content, meta" /></label>
+        <label>คำต้องห้าม (คั่นด้วยจุลภาคหรือขึ้นบรรทัดใหม่)<textarea id="batchForbiddenTerms" rows="3" placeholder="นี่คือผลลัพธ์, ผมได้วิเคราะห์"></textarea></label>
+      </div>
       <p class="hint">ระบบจะเพิ่มกฎห้าม Markdown ห้ามคำอธิบาย และบังคับคืน JSON array ให้อัตโนมัติ</p>
       <div class="dialog-actions"><button value="cancel">ยกเลิก</button><button id="importBatchFile" value="default" class="accent">เลือกไฟล์และสร้างงาน</button></div>
     </form>

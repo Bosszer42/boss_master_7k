@@ -143,7 +143,7 @@ function setMode(mode) {
   const info = {
     normal: ['แชทธรรมดา','ไม่มีคิว ไม่มี Validator และไม่บังคับรูปแบบผลลัพธ์'],
     code: ['เขียนโค้ด','แยกจากกฎเนื้อหา รองรับแนบไฟล์โค้ดและบทสนทนาต่อเนื่อง'],
-    batch: ['งานจำนวนมาก','ประมวลผล 100–1,000+ รายการ ครั้งละ 1–3 พร้อม Checkpoint']
+    batch: ['งานจำนวนมาก','ประมวลผล 100–1,000+ รายการ ครั้งละ 1–6 พร้อม Validator และ Checkpoint']
   }[mode];
   $('#modeInfo').innerHTML = `<h3>${info[0]}</h3><p>${info[1]}</p>`;
   $('#roomSubtitle').textContent = mode === 'code' ? 'พื้นที่คุยและแก้โค้ดแยกจากงานเขียนเนื้อหา' : 'คุยกับ AI ได้ตามปกติ แนบไฟล์และโค้ดได้';
@@ -267,7 +267,9 @@ async function importBatch() {
       name: $('#batchName').value.trim(), instruction: $('#batchInstruction').value.trim(),
       systemPrompt: $('#systemPrompt').value, provider, model,
       batchSize: Number($('#batchSize').value), retry: Number($('#batchRetry').value),
-      delayMs: Number($('#batchDelay').value), temperature: 0.2, maxOutputTokens: 8192
+      delayMs: Number($('#batchDelay').value), temperature: 0.2, maxOutputTokens: 8192,
+      requiredFields: $('#batchRequiredFields').value,
+      forbiddenTerms: $('#batchForbiddenTerms').value
     });
     if (!job) return;
     state.jobs.unshift(job); state.activeJob = job; renderJobSelect(); renderActiveJob();
@@ -345,6 +347,11 @@ $('#importBatchFile').addEventListener('click', (e) => { e.preventDefault(); imp
 $('#jobSelect').addEventListener('change', () => { state.activeJob = state.jobs.find((j) => j.id === $('#jobSelect').value) || null; renderActiveJob(); });
 $('#batchStart').addEventListener('click', async () => { if (!state.activeJob) return toast('เลือกงานก่อน','error'); await window.bossAPI.startBatch(state.activeJob.id); });
 $('#batchPause').addEventListener('click', async () => { if (state.activeJob) await window.bossAPI.pauseBatch(state.activeJob.id); });
+$('#batchRetryFailed').addEventListener('click', async () => {
+  if (!state.activeJob) return toast('เลือกงานก่อน','error');
+  const result = await window.bossAPI.retryFailedBatch(state.activeJob.id);
+  toast(result.count ? `นำ ${result.count} รายการกลับเข้าคิวแล้ว` : 'ไม่มีรายการ FAIL', result.count ? 'success' : '');
+});
 $('#batchCancel').addEventListener('click', async () => { if (state.activeJob && confirm('หยุดงานนี้หรือไม่')) await window.bossAPI.cancelBatch(state.activeJob.id); });
 $('#batchExport').addEventListener('click', async () => { if (!state.activeJob) return toast('เลือกงานก่อน','error'); try { const file = await window.bossAPI.exportBatch(state.activeJob.id); if (file) toast('ส่งออกแล้ว','success'); } catch(error){ toast(error.message,'error'); } });
 window.bossAPI.onBatchUpdated(updateJob);

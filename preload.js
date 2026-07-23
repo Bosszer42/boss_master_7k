@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('bossAPI', {
   startBatch: (jobId) => ipcRenderer.invoke('batch:start', jobId),
   pauseBatch: (jobId) => ipcRenderer.invoke('batch:pause', jobId),
   cancelBatch: (jobId) => ipcRenderer.invoke('batch:cancel', jobId),
+  retryFailedBatch: (jobId) => ipcRenderer.invoke('batch:retry-failed', jobId),
   exportBatch: (jobId) => ipcRenderer.invoke('batch:export', jobId),
   onBatchUpdated: (callback) => {
     const listener = (_, job) => callback(job);

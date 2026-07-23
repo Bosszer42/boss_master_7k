@@ -376,6 +376,56 @@ function cleanJsonText(text) {
     .trim();
 }
 
+function validateBatchResult(result, rules = {}) {
+  const errors = [];
+  if (result === null || typeof result === 'undefined') errors.push('ผลลัพธ์ว่าง');
+  const requiredFields = Array.isArray(rules.requiredFields) ? rules.requiredFields : [];
+  if (requiredFields.length && (!result || typeof result !== 'object' || Array.isArray(result))) {
+    errors.push('ผลลัพธ์ต้องเป็น JSON object');
+  } else {
+    for (const field of requiredFields) {
+      const value = result?.[field];
+      if (value === null || typeof value === 'undefined' || String(value).trim() === '') {
+        errors.push(`ไม่มีข้อมูลช่อง ${field}`);
+      }
+    }
+  }
+  const serialized = JSON.stringify(result ?? '');
+  for (const term of Array.isArray(rules.forbiddenTerms) ? rules.forbiddenTerms : []) {
+    if (term && serialized.toLocaleLowerCase().includes(String(term).toLocaleLowerCase())) {
+      errors.push(`พบคำต้องห้าม: ${term}`);
+    }
+  }
+  if (/```|^\s*(ต่อไปนี้คือ|นี่คือผลลัพธ์|ผมได้วิเคราะห์)/i.test(
+    typeof result === 'string' ? result : ''
+  )) {
+    errors.push('พบ Markdown หรือคำอธิบายที่ไม่ได้อนุญาต');
+  }
+  return errors;
+}
+
+function recoverInterruptedJobs() {
+  let changed = false;
+  for (const job of store.data.jobs) {
+    if (job.status === 'running') {
+      job.status = 'paused';
+      job.lastError = 'โปรแกรมถูกปิดระหว่างทำงาน กดทำต่อเพื่อเริ่มจาก Checkpoint ล่าสุด';
+      changed = true;
+    }
+    for (const item of job.items || []) {
+      if (item.status === 'running') {
+        item.status = 'retry';
+        item.error = 'กู้คืนจากงานที่ถูกขัดจังหวะ';
+        changed = true;
+      }
+    }
+  }
+  if (changed) {
+    store.save();
+    writeLog('warn', 'interrupted_jobs_recovered');
+  }
+}
+
 async function runBatch(jobId) {
   const job = store.data.jobs.find((j) => j.id === jobId && j.userId === currentUserId);
   if (!job) throw new Error('ไม่พบงาน Batch');
@@ -424,12 +474,21 @@ async function runBatch(jobId) {
           item.retryCount += 1;
           continue;
         }
+        const validationErrors = validateBatchResult(entry.result, job.validator);
+        if (validationErrors.length) {
+          item.status = 'retry';
+          item.error = validationErrors.join(' | ');
+          item.validationErrors = validationErrors;
+          item.retryCount += 1;
+          continue;
+        }
         item.output = entry.result;
         item.rawOutput = response.text;
         item.status = 'success';
         item.provider = response.fallbackProvider || job.provider;
         item.model = response.fallbackModel || job.model;
         item.error = '';
+        item.validationErrors = [];
         item.updatedAt = new Date().toISOString();
       }
       consecutiveErrors = group.some((i) => i.status !== 'success') ? consecutiveErrors + 1 : 0;
@@ -645,6 +704,10 @@ function registerIpc() {
       batchSize: Math.max(1, Math.min(6, Number(payload.batchSize || 3))),
       retry: Math.max(0, Number(payload.retry || 3)), delayMs: Math.max(0, Number(payload.delayMs || 2500)),
       stopAfterErrors: Math.max(1, Number(payload.stopAfterErrors || 5)),
+      validator: {
+        requiredFields: String(payload.requiredFields || '').split(',').map((value) => value.trim()).filter(Boolean),
+        forbiddenTerms: String(payload.forbiddenTerms || '').split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean)
+      },
       temperature: Number(payload.temperature ?? 0.2), maxOutputTokens: Number(payload.maxOutputTokens || 8192),
       status: 'draft', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       items: rows.map((row, index) => ({
@@ -688,6 +751,29 @@ function registerIpc() {
     job.status = 'cancelled'; store.save(); emitJob(job);
     return { ok: true };
   });
+  ipcMain.handle('batch:retry-failed', (_, jobId) => {
+    const user = requireLogin();
+    const job = store.data.jobs.find((j) => j.id === jobId && j.userId === user.id);
+    if (!job) throw new Error('ไม่พบงาน Batch');
+    let count = 0;
+    for (const item of job.items) {
+      if (item.status === 'failed') {
+        item.status = 'retry';
+        item.retryCount = 0;
+        item.error = '';
+        item.validationErrors = [];
+        count += 1;
+      }
+    }
+    if (count) {
+      job.status = 'paused';
+      job.lastError = '';
+      job.updatedAt = new Date().toISOString();
+      store.save();
+      emitJob(job);
+    }
+    return { ok: true, count };
+  });
   ipcMain.handle('batch:export', async (_, jobId) => {
     const user = requireLogin();
     const job = store.data.jobs.find((j) => j.id === jobId && j.userId === user.id);
@@ -730,6 +816,7 @@ function registerIpc() {
 app.whenReady().then(() => {
   const dataDir = getDataDir();
   store = new JsonStore(path.join(dataDir, 'database.json'));
+  recoverInterruptedJobs();
   registerIpc();
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
