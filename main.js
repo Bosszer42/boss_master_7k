@@ -11,6 +11,11 @@ let currentUserId = null;
 let store;
 const batchControllers = new Map();
 const RETRYABLE_STATUS = new Set([408, 409, 429, 500, 502, 503, 504]);
+let activeChatAbortController = null;
+const MAX_MESSAGE_CHARS = 12000;
+const MAX_CONTEXT_CHARS = 250000;
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const MAX_ATTACHMENT_TOTAL_BYTES = 40 * 1024 * 1024;
 
 class JsonStore {
   constructor(filePath) {
@@ -187,13 +192,14 @@ function mapGeminiContents(messages, attachments = []) {
   return contents;
 }
 
-async function apiFetch(url, options, timeoutMs = 180000, maxAttempts = 4) {
+async function apiFetch(url, options = {}, timeoutMs = 180000, maxAttempts = 4, signal = null) {
   let lastError;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(url, { ...options, signal: controller.signal });
+      const effectiveSignal = signal || controller.signal;
+      const response = await fetch(url, { ...options, signal: effectiveSignal });
       const raw = await response.text();
       let json;
       try { json = raw ? JSON.parse(raw) : {}; } catch (_) { json = { raw }; }
@@ -249,7 +255,7 @@ async function listModels(provider) {
   throw new Error('Provider ไม่รองรับ');
 }
 
-async function callProvider({ provider, model, messages, systemPrompt, attachments, temperature, maxOutputTokens }) {
+async function callProvider({ provider, model, messages, systemPrompt, attachments, temperature, maxOutputTokens, signal }) {
   const user = requireLogin();
   const settings = userSettings(user.id);
   const key = decryptSecret(settings.apiKeys?.[provider]);
@@ -272,7 +278,7 @@ async function callProvider({ provider, model, messages, systemPrompt, attachmen
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
-    });
+    }, 180000, 4, signal);
     const text = json.output_text || (json.output || [])
       .flatMap((item) => item.content || [])
       .filter((part) => part.type === 'output_text')
@@ -301,7 +307,10 @@ async function callProvider({ provider, model, messages, systemPrompt, attachmen
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-      }
+      },
+      180000,
+      4,
+      signal
     );
     const text = (json.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('\n');
     return {
@@ -335,9 +344,18 @@ async function callProviderWithFallback(request) {
   }
 }
 
+function extractPdfText(buffer) {
+  const raw = buffer.toString('latin1');
+  const matches = [...raw.matchAll(/\((?:\\.|[^()\\])*\)/g)]
+    .map((match) => match[0])
+    .map((value) => value.replace(/^\(/, '').replace(/\)$/,'').replace(/\\([()\\])/g, '$1'))
+    .filter((value) => value.trim().length > 1);
+  return matches.slice(0, 40).join(' ').replace(/\s+/g, ' ').trim().slice(0, 250000);
+}
+
 function readAttachment(filePath) {
   const stat = fs.statSync(filePath);
-  if (stat.size > 25 * 1024 * 1024) throw new Error(`ไฟล์ ${path.basename(filePath)} ใหญ่เกิน 25 MB ในรุ่น Alpha`);
+  if (stat.size > MAX_ATTACHMENT_BYTES) throw new Error(`ไฟล์ ${path.basename(filePath)} ใหญ่เกิน ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB ในรุ่น Alpha`);
   const ext = path.extname(filePath).toLowerCase();
   const name = path.basename(filePath);
   const imageTypes = {
@@ -361,11 +379,22 @@ function readAttachment(filePath) {
     for (const sheetName of workbook.SheetNames.slice(0, 10)) {
       result[sheetName] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' }).slice(0, 2000);
     }
-    return { name, path: filePath, size: stat.size, kind: 'text', text: JSON.stringify(result, null, 2) };
+    return { name, path: filePath, size: stat.size, kind: 'text', text: JSON.stringify(result, null, 2).slice(0, MAX_CONTEXT_CHARS) };
   }
   const allowedText = ['.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm', '.css', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.php', '.py', '.ps1', '.bat', '.cmd', '.sql', '.yaml', '.yml', '.ini', '.log'];
   if (allowedText.includes(ext)) {
-    return { name, path: filePath, size: stat.size, kind: 'text', text: fs.readFileSync(filePath, 'utf8').slice(0, 250000) };
+    return { name, path: filePath, size: stat.size, kind: 'text', text: fs.readFileSync(filePath, 'utf8').slice(0, MAX_CONTEXT_CHARS) };
+  }
+  if (ext === '.pdf') {
+    const buffer = fs.readFileSync(filePath);
+    const text = extractPdfText(buffer);
+    return { name, path: filePath, size: stat.size, kind: 'text', text: text || `[PDF ${name} ถูกอ่านเป็นข้อความอย่างเบา ๆ แล้ว แต่สรุปสาระยังต้องมีการทดสอบกับ API จริง]` };
+  }
+  if (ext === '.docx') {
+    return { name, path: filePath, size: stat.size, kind: 'binary', text: `[DOCX ${name} ถูกยอมรับให้แนบได้ แต่เนื้อหาใน Alpha ยังไม่แปลงข้อความอัตโนมัติเต็มรูปแบบ]` };
+  }
+  if (ext === '.zip') {
+    return { name, path: filePath, size: stat.size, kind: 'binary', text: `[ZIP ${name} ถูกบล็อกเพื่อความปลอดภัย ไม่อนุญาตให้เปิดหรือรันไฟล์ภายใน]` };
   }
   return { name, path: filePath, size: stat.size, kind: 'binary', text: `[ไฟล์แนบ ${name} ยังไม่รองรับการอ่านข้อความในรุ่น Alpha]` };
 }
@@ -654,34 +683,68 @@ function registerIpc() {
     const user = requireLogin();
     const room = store.data.rooms.find((r) => r.id === payload.roomId && r.userId === user.id);
     if (!room) throw new Error('ไม่พบห้อง');
+
+    if (activeChatAbortController) {
+      activeChatAbortController.abort();
+      activeChatAbortController = null;
+    }
+
+    const content = String(payload.content || '');
+    const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
+    const contextChars = content.length + attachments.reduce((sum, file) => sum + String(file.text || '').length, 0);
+    if (content.length > MAX_MESSAGE_CHARS) {
+      throw new Error(`ข้อความยาวเกิน ${MAX_MESSAGE_CHARS.toLocaleString()} ตัวอักษร กรุณาแบ่งส่งเป็นหลายรอบ`);
+    }
+    if (contextChars > MAX_CONTEXT_CHARS) {
+      throw new Error(`ข้อความและไฟล์แนบรวมเกิน ${MAX_CONTEXT_CHARS.toLocaleString()} ตัวอักษร กรุณาลดขนาดก่อนส่ง`);
+    }
+    const totalAttachmentBytes = attachments.reduce((sum, file) => sum + Number(file.size || 0), 0);
+    if (totalAttachmentBytes > MAX_ATTACHMENT_TOTAL_BYTES) {
+      throw new Error(`รวมไฟล์แนบเกิน ${Math.round(MAX_ATTACHMENT_TOTAL_BYTES / 1024 / 1024)} MB กรุณาเลือกไฟล์เล็กลง`);
+    }
+
     const userMessage = {
-      id: crypto.randomUUID(), roomId: room.id, role: 'user', content: payload.content,
-      attachments: (payload.attachments || []).map((f) => ({ name: f.name, path: f.path, size: f.size, kind: f.kind })),
+      id: crypto.randomUUID(), roomId: room.id, role: 'user', content,
+      attachments: attachments.map((f) => ({ name: f.name, path: f.path, size: f.size, kind: f.kind })),
       createdAt: new Date().toISOString()
     };
     store.data.messages.push(userMessage);
     room.updatedAt = new Date().toISOString();
     store.save();
     const history = store.data.messages.filter((m) => m.roomId === room.id).slice(-30).map((m) => ({ role: m.role, content: m.content }));
-    const response = await callProviderWithFallback({
-      provider: payload.provider,
-      model: payload.model,
-      messages: history,
-      systemPrompt: payload.systemPrompt || room.systemPrompt || '',
-      attachments: payload.attachments || [],
-      temperature: Number(payload.temperature),
-      maxOutputTokens: Number(payload.maxOutputTokens)
-    });
-    const assistantMessage = {
-      id: crypto.randomUUID(), roomId: room.id, role: 'assistant', content: response.text,
-      provider: response.fallbackProvider || payload.provider, model: response.fallbackModel || payload.model, usage: response.usage,
-      finishReason: response.finishReason, createdAt: new Date().toISOString()
-    };
-    store.data.messages.push(assistantMessage);
-    room.updatedAt = new Date().toISOString();
-    if (room.title === 'แชทใหม่' && payload.content) room.title = payload.content.trim().slice(0, 45);
-    store.save();
-    return { userMessage, assistantMessage, room };
+    activeChatAbortController = new AbortController();
+    try {
+      const response = await callProviderWithFallback({
+        provider: payload.provider,
+        model: payload.model,
+        messages: history,
+        systemPrompt: payload.systemPrompt || room.systemPrompt || '',
+        attachments,
+        temperature: Number(payload.temperature),
+        maxOutputTokens: Number(payload.maxOutputTokens),
+        signal: activeChatAbortController.signal
+      });
+      const assistantMessage = {
+        id: crypto.randomUUID(), roomId: room.id, role: 'assistant', content: response.text,
+        provider: response.fallbackProvider || payload.provider, model: response.fallbackModel || payload.model, usage: response.usage,
+        finishReason: response.finishReason, createdAt: new Date().toISOString()
+      };
+      store.data.messages.push(assistantMessage);
+      room.updatedAt = new Date().toISOString();
+      if (room.title === 'แชทใหม่' && content) room.title = content.trim().slice(0, 45);
+      store.save();
+      return { userMessage, assistantMessage, room };
+    } finally {
+      activeChatAbortController = null;
+    }
+  });
+
+  ipcMain.handle('chat:stop', () => {
+    if (activeChatAbortController) {
+      activeChatAbortController.abort();
+      activeChatAbortController = null;
+    }
+    return { ok: true };
   });
 
   ipcMain.handle('files:select', async () => {

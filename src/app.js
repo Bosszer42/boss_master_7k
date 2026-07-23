@@ -210,8 +210,10 @@ async function sendMessage() {
   if (!model) return toast('กรุณาเลือกโมเดลก่อน', 'error');
   if (!state.activeRoom) await createRoom();
   state.busy = true;
-  $('#sendButton').textContent = 'กำลังตอบ...';
-  $('#sendButton').disabled = true;
+  $('#sendButton').classList.add('hidden');
+  $('#stopButton').classList.remove('hidden');
+  $('#stopButton').disabled = false;
+  $('#stopButton').textContent = 'หยุดตอบ';
   const optimistic = await window.bossAPI.listMessages(state.activeRoom.id);
   optimistic.push({ role: 'user', content, createdAt: new Date().toISOString() });
   renderMessages(optimistic);
@@ -228,10 +230,17 @@ async function sendMessage() {
     if (roomIndex >= 0) state.rooms[roomIndex] = result.room;
     await openRoom(state.activeRoom.id);
   } catch (error) {
-    toast(error.message, 'error');
+    if (error?.message?.includes('AbortError') || error?.name === 'AbortError') {
+      toast('หยุดการตอบแล้ว', 'error');
+    } else {
+      toast(error.message, 'error');
+    }
     await openRoom(state.activeRoom.id);
   } finally {
-    state.busy = false; $('#sendButton').textContent = 'ส่ง ➤'; $('#sendButton').disabled = false;
+    state.busy = false;
+    $('#sendButton').classList.remove('hidden');
+    $('#stopButton').classList.add('hidden');
+    $('#stopButton').disabled = true;
   }
 }
 
@@ -359,6 +368,12 @@ $('#roomSearch').addEventListener('input', renderRooms);
 $('#composer').addEventListener('input', updateCharCount);
 $('#composer').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendMessage(); });
 $('#sendButton').addEventListener('click', sendMessage);
+$('#stopButton').addEventListener('click', async () => {
+  if (!state.busy) return;
+  $('#stopButton').disabled = true;
+  $('#stopButton').textContent = 'กำลังหยุด...';
+  await window.bossAPI.stopChat();
+});
 $('#attachButton').addEventListener('click', selectAttachments);
 $('#clearAttachments').addEventListener('click', () => { state.attachments = []; renderAttachments(); });
 $('#refreshModels').addEventListener('click', () => refreshModels(true));

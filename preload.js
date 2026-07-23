@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('bossAPI', {
   deleteRoom: (id) => ipcRenderer.invoke('rooms:delete', id),
   listMessages: (roomId) => ipcRenderer.invoke('messages:list', roomId),
   sendChat: (payload) => ipcRenderer.invoke('chat:send', payload),
+  stopChat: () => ipcRenderer.invoke('chat:stop'),
   selectFiles: () => ipcRenderer.invoke('files:select'),
   importBatch: (payload) => ipcRenderer.invoke('batch:import', payload),
   listJobs: () => ipcRenderer.invoke('batch:list'),
