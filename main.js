@@ -529,7 +529,7 @@ function cleanJsonText(text) {
     .trim();
 }
 
-function validateBatchResult(result, rules = {}) {
+function validateBatchResult(result, rules = {}, source = {}) {
   const errors = [];
   if (result === null || typeof result === 'undefined') errors.push('ผลลัพธ์ว่าง');
   const requiredFields = Array.isArray(rules.requiredFields) ? rules.requiredFields : [];
@@ -544,6 +544,23 @@ function validateBatchResult(result, rules = {}) {
     }
   }
   const serialized = JSON.stringify(result ?? '');
+  const textValue = typeof result === 'string'
+    ? result
+    : Object.values(result && typeof result === 'object' ? result : {}).filter((value) => typeof value === 'string').join('\n');
+  const charCount = textValue.length;
+  const wordCount = textValue.trim() ? textValue.trim().split(/\s+/).length : 0;
+  const paragraphCount = textValue.trim() ? textValue.trim().split(/\n\s*\n/).filter(Boolean).length : 0;
+  if (Number(rules.minChars) > 0 && charCount < Number(rules.minChars)) errors.push(`ความยาว ${charCount} ตัวอักษร ต่ำกว่า ${rules.minChars}`);
+  if (Number(rules.maxChars) > 0 && charCount > Number(rules.maxChars)) errors.push(`ความยาว ${charCount} ตัวอักษร เกิน ${rules.maxChars}`);
+  if (Number(rules.minWords) > 0 && wordCount < Number(rules.minWords)) errors.push(`จำนวนคำ ${wordCount} ต่ำกว่า ${rules.minWords}`);
+  if (Number(rules.paragraphs) > 0 && paragraphCount !== Number(rules.paragraphs)) errors.push(`จำนวนย่อหน้า ${paragraphCount} ต้องเป็น ${rules.paragraphs}`);
+  for (const field of Array.isArray(rules.sourceEqualFields) ? rules.sourceEqualFields : []) {
+    if (JSON.stringify(result?.[field] ?? null) !== JSON.stringify(source?.[field] ?? null)) errors.push(`ช่อง ${field} ไม่ตรงข้อมูลต้นฉบับ`);
+  }
+  const fieldTypes = rules.fieldTypes && typeof rules.fieldTypes === 'object' ? rules.fieldTypes : {};
+  for (const [field, expectedType] of Object.entries(fieldTypes)) {
+    if (typeof result?.[field] !== expectedType) errors.push(`ช่อง ${field} ต้องเป็นชนิด ${expectedType}`);
+  }
   for (const term of Array.isArray(rules.forbiddenTerms) ? rules.forbiddenTerms : []) {
     if (term && serialized.toLocaleLowerCase().includes(String(term).toLocaleLowerCase())) {
       errors.push(`พบคำต้องห้าม: ${term}`);
@@ -555,6 +572,36 @@ function validateBatchResult(result, rules = {}) {
     errors.push('พบ Markdown หรือคำอธิบายที่ไม่ได้อนุญาต');
   }
   return errors;
+}
+
+async function repairBatchResult(job, item, currentResult, errors) {
+  const response = await callProviderWithFallback({
+    provider: job.provider,
+    model: job.model,
+    messages: [{
+      role: 'user',
+      content: [
+        'ซ่อมเฉพาะช่องที่ตรวจไม่ผ่าน คืน JSON object เท่านั้น',
+        'ห้ามแก้ช่องอื่นที่ผ่านแล้ว ห้ามเพิ่มคำอธิบายหรือ Markdown',
+        `ERRORS: ${JSON.stringify(errors)}`,
+        `SOURCE: ${JSON.stringify(item.source)}`,
+        `CURRENT_RESULT: ${JSON.stringify(currentResult)}`
+      ].join('\n')
+    }],
+    systemPrompt: job.systemPrompt || 'คุณเป็นระบบซ่อมข้อมูลแบบเข้มงวด',
+    attachments: [],
+    temperature: 0,
+    maxOutputTokens: job.maxOutputTokens || 8192
+  });
+  const repaired = JSON.parse(cleanJsonText(response.text));
+  if (!repaired || typeof repaired !== 'object' || Array.isArray(repaired)) throw new Error('ผลซ่อมไม่ใช่ JSON object');
+  const invalidFields = new Set(errors.map((error) => String(error).match(/ช่อง\s+([^\s]+)/)?.[1]).filter(Boolean));
+  if (!invalidFields.size) return { ...currentResult, ...repaired };
+  const merged = { ...currentResult };
+  for (const field of invalidFields) {
+    if (Object.prototype.hasOwnProperty.call(repaired, field)) merged[field] = repaired[field];
+  }
+  return merged;
 }
 
 function recoverInterruptedJobs() {
@@ -627,7 +674,17 @@ async function runBatch(jobId) {
           item.retryCount += 1;
           continue;
         }
-        const validationErrors = validateBatchResult(entry.result, job.validator);
+        let finalResult = entry.result;
+        let validationErrors = validateBatchResult(finalResult, job.validator, item.source);
+        if (validationErrors.length && Number(job.autoRepair ?? 1) > 0) {
+          try {
+            finalResult = await repairBatchResult(job, item, finalResult, validationErrors);
+            validationErrors = validateBatchResult(finalResult, job.validator, item.source);
+            item.repaired = true;
+          } catch (repairError) {
+            validationErrors.push(`ซ่อมอัตโนมัติไม่สำเร็จ: ${repairError.message}`);
+          }
+        }
         if (validationErrors.length) {
           item.status = 'retry';
           item.error = validationErrors.join(' | ');
@@ -635,7 +692,7 @@ async function runBatch(jobId) {
           item.retryCount += 1;
           continue;
         }
-        item.output = entry.result;
+        item.output = finalResult;
         item.rawOutput = response.text;
         item.status = 'success';
         item.provider = response.fallbackProvider || job.provider;
@@ -916,9 +973,19 @@ function registerIpc() {
       batchSize: Math.max(1, Math.min(6, Number(payload.batchSize || 3))),
       retry: Math.max(0, Number(payload.retry || 3)), delayMs: Math.max(0, Number(payload.delayMs || 2500)),
       stopAfterErrors: Math.max(1, Number(payload.stopAfterErrors || 5)),
+      autoRepair: payload.autoRepair === false ? 0 : 1,
       validator: {
         requiredFields: String(payload.requiredFields || '').split(',').map((value) => value.trim()).filter(Boolean),
-        forbiddenTerms: String(payload.forbiddenTerms || '').split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean)
+        forbiddenTerms: String(payload.forbiddenTerms || '').split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean),
+        sourceEqualFields: String(payload.sourceEqualFields || '').split(',').map((value) => value.trim()).filter(Boolean),
+        minChars: Math.max(0, Number(payload.minChars || 0)),
+        maxChars: Math.max(0, Number(payload.maxChars || 0)),
+        minWords: Math.max(0, Number(payload.minWords || 0)),
+        paragraphs: Math.max(0, Number(payload.paragraphs || 0)),
+        fieldTypes: (() => {
+          try { return payload.fieldTypes ? JSON.parse(payload.fieldTypes) : {}; }
+          catch (_) { throw new Error('JSON ชนิดข้อมูลไม่ถูกต้อง ตัวอย่าง: {"title":"string"}'); }
+        })()
       },
       temperature: Number(payload.temperature ?? 0.2), maxOutputTokens: Number(payload.maxOutputTokens || 8192),
       status: 'draft', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -1006,11 +1073,13 @@ function registerIpc() {
         { name: 'Excel', extensions: ['xlsx'] },
         { name: 'CSV UTF-8', extensions: ['csv'] },
         { name: 'JSON', extensions: ['json'] }
+        ,{ name: 'JSON Lines', extensions: ['jsonl'] }
       ]
     });
     if (result.canceled) return null;
     const outputExt = path.extname(result.filePath).toLowerCase();
     if (outputExt === '.json') fs.writeFileSync(result.filePath, JSON.stringify(rows, null, 2), 'utf8');
+    else if (outputExt === '.jsonl') fs.writeFileSync(result.filePath, `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`, 'utf8');
     else if (outputExt === '.csv') {
       const csv = XLSX.utils.sheet_to_csv(XLSX.utils.json_to_sheet(rows));
       fs.writeFileSync(result.filePath, `\uFEFF${csv}`, 'utf8');

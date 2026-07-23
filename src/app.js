@@ -337,7 +337,13 @@ async function importBatch() {
       batchSize: Number($('#batchSize').value), retry: Number($('#batchRetry').value),
       delayMs: Number($('#batchDelay').value), temperature: 0.2, maxOutputTokens: 8192,
       requiredFields: $('#batchRequiredFields').value,
-      forbiddenTerms: $('#batchForbiddenTerms').value
+      forbiddenTerms: $('#batchForbiddenTerms').value,
+      sourceEqualFields: $('#batchSourceEqualFields').value,
+      fieldTypes: $('#batchFieldTypes').value,
+      minChars: Number($('#batchMinChars').value),
+      maxChars: Number($('#batchMaxChars').value),
+      minWords: Number($('#batchMinWords').value),
+      paragraphs: Number($('#batchParagraphs').value)
     });
     if (!job) return;
     state.jobs.unshift(job); state.activeJob = job; renderJobSelect(); renderActiveJob();

@@ -155,6 +155,12 @@
       <div class="form-grid validator-grid">
         <label>ช่องบังคับ (คั่นด้วยจุลภาค)<input id="batchRequiredFields" placeholder="title, content, meta" /></label>
         <label>คำต้องห้าม (คั่นด้วยจุลภาคหรือขึ้นบรรทัดใหม่)<textarea id="batchForbiddenTerms" rows="3" placeholder="นี่คือผลลัพธ์, ผมได้วิเคราะห์"></textarea></label>
+        <label>ช่องที่ต้องตรงต้นฉบับ<input id="batchSourceEqualFields" placeholder="code, actor, studio" /></label>
+        <label>ชนิดข้อมูล JSON<input id="batchFieldTypes" placeholder='{"title":"string","tags":"object"}' /></label>
+        <label>อักษรต่ำสุด<input id="batchMinChars" type="number" min="0" value="0" /></label>
+        <label>อักษรสูงสุด<input id="batchMaxChars" type="number" min="0" value="0" /></label>
+        <label>จำนวนคำต่ำสุด<input id="batchMinWords" type="number" min="0" value="0" /></label>
+        <label>จำนวนย่อหน้า (0 = ไม่ตรวจ)<input id="batchParagraphs" type="number" min="0" value="0" /></label>
       </div>
       <p class="hint">ระบบจะเพิ่มกฎห้าม Markdown ห้ามคำอธิบาย และบังคับคืน JSON array ให้อัตโนมัติ</p>
       <div class="dialog-actions"><button value="cancel">ยกเลิก</button><button id="importBatchFile" value="default" class="accent">เลือกไฟล์และสร้างงาน</button></div>
