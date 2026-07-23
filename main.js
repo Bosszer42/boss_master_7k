@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -29,6 +29,7 @@ class JsonStore {
         rooms: [],
         messages: [],
         jobs: [],
+        notes: {},
         audit: []
       };
     }
@@ -597,6 +598,26 @@ function registerIpc() {
     return publicSettings(settings);
   });
   ipcMain.handle('providers:list-models', (_, provider) => listModels(provider));
+
+  ipcMain.handle('notes:get', () => {
+    const user = requireLogin();
+    store.data.notes ||= {};
+    return store.data.notes[user.id] || { content: '', updatedAt: null };
+  });
+  ipcMain.handle('notes:save', (_, payload) => {
+    const user = requireLogin();
+    const content = String(payload?.content || '');
+    if (content.length > 2_000_000) throw new Error('Notepad รองรับสูงสุด 2,000,000 ตัวอักษร');
+    store.data.notes ||= {};
+    store.data.notes[user.id] = { content, updatedAt: new Date().toISOString() };
+    store.save();
+    return { updatedAt: store.data.notes[user.id].updatedAt, length: content.length };
+  });
+  ipcMain.handle('clipboard:write-text', (_, text) => {
+    requireLogin();
+    clipboard.writeText(String(text || ''));
+    return { ok: true };
+  });
 
   ipcMain.handle('rooms:list', () => {
     const user = requireLogin();

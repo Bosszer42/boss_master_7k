@@ -4,7 +4,8 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const state = {
   user: null, needsOwner: false, mode: 'normal', settings: null,
-  rooms: [], activeRoom: null, attachments: [], jobs: [], activeJob: null, busy: false
+  rooms: [], activeRoom: null, attachments: [], jobs: [], activeJob: null, busy: false,
+  noteLoaded: false, noteSaveTimer: null
 };
 
 function toast(message, type = '') {
@@ -136,14 +137,17 @@ function setMode(mode) {
   state.mode = mode;
   $$('.mode').forEach((button) => button.classList.toggle('active', button.dataset.mode === mode));
   const batch = mode === 'batch';
-  $('#chatView').classList.toggle('hidden', batch);
+  const notepad = mode === 'notepad';
+  $('#chatView').classList.toggle('hidden', batch || notepad);
   $('#batchView').classList.toggle('hidden', !batch);
-  $('#newRoomButton').classList.toggle('hidden', batch);
+  $('#notepadView').classList.toggle('hidden', !notepad);
+  $('#newRoomButton').classList.toggle('hidden', batch || notepad);
   $('#newBatchButton').classList.toggle('hidden', !batch);
   const info = {
     normal: ['แชทธรรมดา','ไม่มีคิว ไม่มี Validator และไม่บังคับรูปแบบผลลัพธ์'],
     code: ['เขียนโค้ด','แยกจากกฎเนื้อหา รองรับแนบไฟล์โค้ดและบทสนทนาต่อเนื่อง'],
-    batch: ['งานจำนวนมาก','ประมวลผล 100–1,000+ รายการ ครั้งละ 1–6 พร้อม Validator และ Checkpoint']
+    batch: ['งานจำนวนมาก','ประมวลผล 100–1,000+ รายการ ครั้งละ 1–6 พร้อม Validator และ Checkpoint'],
+    notepad: ['Notepad ส่วนตัว','บันทึกข้อความในเครื่อง แยกตามบัญชี และไม่ส่งข้อมูลเข้า AI']
   }[mode];
   $('#modeInfo').innerHTML = `<h3>${info[0]}</h3><p>${info[1]}</p>`;
   $('#roomSubtitle').textContent = mode === 'code' ? 'พื้นที่คุยและแก้โค้ดแยกจากงานเขียนเนื้อหา' : 'คุยกับ AI ได้ตามปกติ แนบไฟล์และโค้ดได้';
@@ -151,6 +155,40 @@ function setMode(mode) {
     $('#assistantPreset').value = 'code'; applyAssistantPreset();
   }
   if (batch) renderActiveJob();
+  if (notepad) loadNote();
+}
+
+async function loadNote() {
+  if (state.noteLoaded) return;
+  try {
+    const note = await window.bossAPI.getNote();
+    $('#notepadEditor').value = note.content || '';
+    state.noteLoaded = true;
+    updateNoteStatus(note.updatedAt);
+  } catch (error) { toast(error.message, 'error'); }
+}
+
+function updateNoteStatus(updatedAt = null) {
+  const length = $('#notepadEditor').value.length;
+  $('#notepadCharCount').textContent = `${length.toLocaleString()} ตัวอักษร`;
+  $('#notepadSaveStatus').textContent = updatedAt
+    ? `บันทึกอัตโนมัติแล้ว ${new Date(updatedAt).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'})}`
+    : 'ยังไม่มีการเปลี่ยนแปลง';
+}
+
+function scheduleNoteSave() {
+  updateNoteStatus();
+  $('#notepadSaveStatus').textContent = 'กำลังรอบันทึก...';
+  clearTimeout(state.noteSaveTimer);
+  state.noteSaveTimer = setTimeout(async () => {
+    try {
+      const result = await window.bossAPI.saveNote($('#notepadEditor').value);
+      updateNoteStatus(result.updatedAt);
+    } catch (error) {
+      $('#notepadSaveStatus').textContent = 'บันทึกไม่สำเร็จ';
+      toast(error.message, 'error');
+    }
+  }, 600);
 }
 
 function applyAssistantPreset() {
@@ -354,5 +392,15 @@ $('#batchRetryFailed').addEventListener('click', async () => {
 });
 $('#batchCancel').addEventListener('click', async () => { if (state.activeJob && confirm('หยุดงานนี้หรือไม่')) await window.bossAPI.cancelBatch(state.activeJob.id); });
 $('#batchExport').addEventListener('click', async () => { if (!state.activeJob) return toast('เลือกงานก่อน','error'); try { const file = await window.bossAPI.exportBatch(state.activeJob.id); if (file) toast('ส่งออกแล้ว','success'); } catch(error){ toast(error.message,'error'); } });
+$('#notepadEditor').addEventListener('input', scheduleNoteSave);
+$('#copyNote').addEventListener('click', async () => {
+  await window.bossAPI.copyText($('#notepadEditor').value);
+  toast('คัดลอกโน้ตแล้ว', 'success');
+});
+$('#clearNote').addEventListener('click', () => {
+  if (!confirm('ล้างข้อความทั้งหมดใน Notepad หรือไม่')) return;
+  $('#notepadEditor').value = '';
+  scheduleNoteSave();
+});
 window.bossAPI.onBatchUpdated(updateJob);
 bootstrap();

@@ -32,6 +32,7 @@
         <button data-mode="normal" class="mode active">💬 แชทธรรมดา</button>
         <button data-mode="code" class="mode">&lt;/&gt; เขียนโค้ด</button>
         <button data-mode="batch" class="mode">▦ งานจำนวนมาก</button>
+        <button data-mode="notepad" class="mode">▤ Notepad</button>
       </nav>
       <div class="top-actions">
         <select id="providerSelect"><option value="openai">OpenAI (GPT)</option><option value="gemini">Gemini</option></select>
@@ -77,6 +78,20 @@
             <div><button id="attachButton">📎 แนบไฟล์</button><button id="clearAttachments">ล้างไฟล์</button></div>
             <div class="send-side"><span id="charCount">0 ตัวอักษร</span><button id="sendButton" class="primary">ส่ง ➤</button></div>
           </div>
+        </div>
+      </section>
+
+      <section id="notepadView" class="view notepad-view hidden">
+        <div class="workspace-head">
+          <div><h2>Notepad ส่วนตัว</h2><p>เก็บข้อความส่วนตัวในเครื่อง แยกตามบัญชี และไม่ส่งเข้า AI</p></div>
+          <div class="head-actions"><button id="copyNote">⧉ คัดลอก</button><button id="clearNote" class="danger">⌫ ล้างโน้ต</button></div>
+        </div>
+        <div class="notepad-editor-wrap">
+          <textarea id="notepadEditor" spellcheck="true" placeholder="เขียนโน้ต คำสั่ง รายการงาน หรือข้อความที่ต้องการเก็บไว้ที่นี่..."></textarea>
+        </div>
+        <div class="notepad-status">
+          <span id="notepadSaveStatus">พร้อมใช้งาน</span>
+          <span id="notepadCharCount">0 ตัวอักษร</span>
         </div>
       </section>
 
